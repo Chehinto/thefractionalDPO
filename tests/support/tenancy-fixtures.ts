@@ -59,9 +59,26 @@ export async function createActor(label: string): Promise<Actor> {
   return { email, password, authUserId: data.user!.id, personId: person.id as string, client };
 }
 
-/** Create a workspace owned by this actor, returning its id. */
-export async function createTenant(actor: Actor, name: string): Promise<string> {
-  const { data, error } = await actor.client.rpc("create_tenant", { p_name: name });
+export type LegalBasis = "mandatory" | "contractual" | "voluntary";
+
+/**
+ * Create a workspace owned by this actor, returning its id.
+ *
+ * The legal basis defaults HERE, in the test helper, so suites that are about
+ * something else stay readable. `create_tenant` itself has no default and no
+ * optional argument — §6 requires the answer to be captured, and a database
+ * default would quietly record a legal position nobody stated.
+ */
+export async function createTenant(
+  actor: Actor,
+  name: string,
+  legalBasis: LegalBasis = "voluntary"
+): Promise<string> {
+  const { data, error } = await actor.client.rpc("create_tenant", {
+    p_caller_person_id: actor.personId,
+    p_tenant_name: name,
+    p_legal_basis: legalBasis,
+  });
   if (error) throw new Error(`create_tenant failed: ${error.message}`);
   return (data as { id: string }).id;
 }

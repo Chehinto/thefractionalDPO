@@ -27,7 +27,7 @@ export async function GET(
     const supabase = await requestClient();
     const { data: tenant } = await supabase
       .from("tenants")
-      .select("id, name, status, created_at")
+      .select("id, name, status, legal_basis, created_at")
       .eq("id", tenantId)
       .maybeSingle();
 
