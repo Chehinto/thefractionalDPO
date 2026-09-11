@@ -625,7 +625,20 @@ grant execute on function public.my_memberships() to authenticated, service_role
 -- a table with a permissive policy and no grant is unreachable, and a table
 -- with a grant and no policy returns nothing. Writes to `people` are granted to
 -- nobody, so the sign-up trigger is the only way a person row is ever created.
+--
+-- The revoke is not redundant. Supabase's bootstrap issues a blanket
+-- `grant all on all tables in schema public to anon, authenticated`, so a
+-- migration that only ADDS grants leaves DELETE and TRUNCATE in place. RLS
+-- covers DELETE (no policy, no rows affected) but **TRUNCATE is not subject to
+-- RLS at all** — it is table-level, and a policy cannot stop it. PostgREST
+-- never issues TRUNCATE, so this is not reachable today; it is revoked because
+-- "unreachable through the current client" is not the same as "denied", and
+-- the next thing to hold this role may not be PostgREST.
 -- ---------------------------------------------------------------------------
+revoke all on public.people from anon, authenticated;
+revoke all on public.tenants from anon, authenticated;
+revoke all on public.memberships from anon, authenticated;
+
 grant select on public.people to authenticated;
 grant select, update on public.tenants to authenticated;
 grant select, insert, update on public.memberships to authenticated;
