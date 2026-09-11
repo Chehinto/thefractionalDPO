@@ -20,12 +20,8 @@
  * DPIA items become additional `QueueItem`s in the same list when those tables
  * exist; nothing about the ordering or the dependency logic changes.
  *
- * WHY THE QUEUE LOGIC IS NOT EXPORTED
- *
- * Next only permits its own known exports from a page file, so `queueFor` and
- * `byUrgency` stay private and are asserted through what the page renders
- * rather than by importing them. That is the stronger test anyway: ordering is
- * a property of the screen a DPO actually reads.
+ * The queue rules live in `@/lib/tenant-queue`, shared with the single-tenant
+ * view. Only the presentation is here.
  *
  * THE VIEW TOGGLE
  *
@@ -39,212 +35,21 @@
 import Link from "next/link";
 import { requireSession, TenantAccessError } from "@/lib/tenant-access";
 import { requestClient } from "@/lib/supabase-server";
-import { LEGAL_BASIS_LABELS, type LegalBasis } from "@/lib/legal-basis";
+import { LEGAL_BASIS_LABELS } from "@/lib/legal-basis";
+import {
+  byUrgency,
+  MEMBER_COLUMNS,
+  queueFor,
+  taggedFieldsFor,
+  TENANT_COLUMNS,
+  type Confidence,
+  type MemberRow,
+  type Owner,
+  type QueueItem,
+  type TenantRow,
+} from "@/lib/tenant-queue";
 
 export const dynamic = "force-dynamic";
-
-// ---------------------------------------------------------------------------
-// Confidence tagging (§7)
-//
-// Every field the product states about a company carries where it came from.
-// `stated` is a human's answer, `inferred` is derived from something else and
-// could be wrong, `unknown` is an admission. Shown, never hidden: a DPO signing
-// their name to a register needs to know which facts are actually evidenced,
-// and a field that looks the same whether it was answered or guessed is worse
-// than no field at all.
-// ---------------------------------------------------------------------------
-type Confidence = "stated" | "inferred" | "unknown";
-
-interface TaggedField {
-  label: string;
-  value: string | null;
-  confidence: Confidence;
-  /** Why it carries that tag, shown on hover — provenance, not decoration. */
-  basis: string;
-}
-
-// ---------------------------------------------------------------------------
-// The urgency queue
-// ---------------------------------------------------------------------------
-
-type Owner = "you" | "company" | "outside";
-
-interface QueueItem {
-  id: string;
-  /** The work, named. Never a status number. */
-  title: string;
-  detail: string;
-  /** Which area it belongs to — shown, but deliberately not what it sorts by. */
-  where: string;
-  waitingOn: string;
-  owner: Owner;
-  /** Days until it runs out. Negative is overdue. Null means no clock yet. */
-  daysLeft: number | null;
-  clock: string;
-  action: "Decide" | "Chase" | "Review" | "Open";
-  /** Severity breaks ties for items that have no clock at all. */
-  severity: number;
-  /** id of an item that must be resolved before this one can be. */
-  blockedBy?: string;
-}
-
-const DAY = 86_400_000;
-
-function daysBetween(from: Date, to: Date): number {
-  return Math.floor((to.getTime() - from.getTime()) / DAY);
-}
-
-/**
- * "Ordered by what runs out first, not by which tab it lives in."
- *
- * Sorting by area would group the work by which part of the product happens to
- * own it, which is an implementation detail of the product rather than a fact
- * about the DPO's week. Anything with a clock sorts by that clock, most overdue
- * first. Anything without one sorts after, by severity — an item with no
- * deadline is not therefore unimportant, it just cannot claim a place in the
- * dated run.
- */
-function byUrgency(a: QueueItem, b: QueueItem): number {
-  if (a.daysLeft !== null && b.daysLeft !== null) return a.daysLeft - b.daysLeft;
-  if (a.daysLeft !== null) return -1;
-  if (b.daysLeft !== null) return 1;
-  return b.severity - a.severity;
-}
-
-/** How urgently an empty or single-occupant Active DPO seat reads (§6). */
-const BASIS_SEVERITY: Record<LegalBasis, number> = {
-  mandatory: 30, // Art. 37 obligation — an empty seat is a live breach
-  contractual: 20, // a representation already made to a customer becomes false
-  voluntary: 10, // governance lapse, and Art. 37(4) duties still attach
-};
-
-const BASIS_CONSEQUENCE: Record<LegalBasis, string> = {
-  mandatory: "Art. 37 requires a DPO here, so an empty seat is a live breach.",
-  contractual: "A customer was told this company has a DPO. An empty seat makes that false.",
-  voluntary: "Self-designated, but Art. 37(4) independence duties attach once designated.",
-};
-
-/** §5: a read-only tenant is purged after a year, not immediately. */
-const PURGE_AFTER_DAYS = 365;
-
-interface TenantRow {
-  id: string;
-  name: string;
-  status: "active" | "read_only" | "suspended";
-  legal_basis: LegalBasis;
-  status_changed_at: string;
-  created_at: string;
-}
-
-interface MemberRow {
-  id: string;
-  tenant_id: string;
-  tier: "active_dpo" | "staff" | "external_scoped";
-  active_from: string;
-  active_to: string | null;
-  person: { id: string; email: string; full_name: string | null; auth_user_id: string | null } | null;
-}
-
-/**
- * Everything this tenant currently needs from its DPO, derived from rows that
- * exist. Each branch names the design-resume rule it implements.
- */
-function queueFor(tenant: TenantRow, members: MemberRow[], now: Date): QueueItem[] {
-  const items: QueueItem[] = [];
-  const live = members.filter(
-    (m) => new Date(m.active_from) <= now && (!m.active_to || new Date(m.active_to) > now)
-  );
-
-  // §5 — the retention clock. A lapsed card must not delete a compliance
-  // register, but it does start a countdown, and the countdown is the leverage.
-  if (tenant.status === "read_only") {
-    const purgeOn = new Date(new Date(tenant.status_changed_at).getTime() + PURGE_AFTER_DAYS * DAY);
-    const daysLeft = daysBetween(now, purgeOn);
-    items.push({
-      id: `${tenant.id}:read-only`,
-      title: "Workspace is read-only",
-      detail:
-        "Billing lapsed. The register is intact and readable, but nothing can be changed, and it is purged when the year runs out.",
-      where: "Governance",
-      waitingOn: "Billing",
-      owner: "outside",
-      daysLeft,
-      clock: daysLeft < 0 ? `Purge overdue ${-daysLeft}d` : `Purged in ${daysLeft}d`,
-      action: "Open",
-      severity: 40,
-    });
-  }
-
-  // §4 tier 3 — external scoped access is time-limited by design, so every
-  // grant has an expiry worth seeing before an auditor loses access mid-review.
-  for (const grant of live.filter((m) => m.tier === "external_scoped" && m.active_to)) {
-    const daysLeft = daysBetween(now, new Date(grant.active_to!));
-    items.push({
-      id: `${tenant.id}:external:${grant.id}`,
-      title: "External access expires",
-      detail: `${grant.person?.email ?? "An external reviewer"} holds a scoped grant on this workspace. It ends on its own; extend it only if the review is still running.`,
-      where: "Audit",
-      waitingOn: grant.person?.full_name ?? grant.person?.email ?? "External reviewer",
-      owner: "outside",
-      daysLeft,
-      clock: daysLeft < 0 ? `Expired ${-daysLeft}d ago` : `Expires in ${daysLeft}d`,
-      action: "Review",
-      severity: 15,
-    });
-  }
-
-  // §5 — zero-Active-DPO must be an explicit choice, never an automatic
-  // promotion. One seat filled is one revocation away from that choice, and how
-  // bad the empty seat would be is decided by §6's legal basis.
-  const activeDpos = live.filter((m) => m.tier === "active_dpo");
-  if (activeDpos.length === 1) {
-    items.push({
-      id: `${tenant.id}:sole-dpo`,
-      title: "You are the only Active DPO",
-      detail: `No successor is named. ${BASIS_CONSEQUENCE[tenant.legal_basis]}`,
-      where: "Governance",
-      waitingOn: "You",
-      owner: "you",
-      daysLeft: null,
-      clock: "No successor",
-      action: "Decide",
-      severity: BASIS_SEVERITY[tenant.legal_basis],
-    });
-  }
-
-  // §4 tier 2 — the roster is the base object precisely so you can prove who
-  // did NOT respond. Someone who never signed in cannot acknowledge anything,
-  // so they are a hole in every future attestation, not just a pending invite.
-  const unclaimed = live.filter((m) => m.tier === "staff" && m.person && !m.person.auth_user_id);
-  if (unclaimed.length > 0) {
-    const oldest = unclaimed.reduce((a, b) =>
-      new Date(a.active_from) < new Date(b.active_from) ? a : b
-    );
-    const waiting = daysBetween(new Date(oldest.active_from), now);
-    items.push({
-      id: `${tenant.id}:unclaimed-roster`,
-      title:
-        unclaimed.length === 1
-          ? "A rostered colleague has never signed in"
-          : `${unclaimed.length} rostered colleagues have never signed in`,
-      detail:
-        "They are on the roster but hold no account, so nothing can be assigned to them and they cannot acknowledge a policy. Until they sign in, any completion figure that counts them is wrong.",
-      where: "People",
-      waitingOn: unclaimed[0].person?.full_name ?? unclaimed[0].person?.email ?? "Rostered staff",
-      owner: "company",
-      daysLeft: null,
-      clock: `Rostered ${waiting}d ago`,
-      action: "Chase",
-      severity: 12,
-      // A read-only workspace refuses roster writes — `app.tenant_is_writable`
-      // enforces that in the database — so chasing this is wasted effort until
-      // billing is sorted. The dependency is real, not illustrative.
-      blockedBy: tenant.status === "read_only" ? `${tenant.id}:read-only` : undefined,
-    });
-  }
-
-  return items.sort(byUrgency);
-}
 
 // ---------------------------------------------------------------------------
 // Page
@@ -298,17 +103,11 @@ export default async function PortfolioPage({
     const [tenantResult, memberResult] = await Promise.all([
       supabase
         .from("tenants")
-        .select("id, name, status, legal_basis, status_changed_at, created_at")
+        .select(TENANT_COLUMNS)
         .in("id", tenantIds),
       supabase
         .from("memberships")
-        // The FK must be named. `memberships` points at `people` twice — once
-        // as the member (person_id) and once as whoever revoked them
-        // (revoked_by) — so an unqualified embed is ambiguous and PostgREST
-        // refuses the whole query rather than guessing.
-        .select(
-          "id, tenant_id, tier, active_from, active_to, person:people!memberships_person_id_fkey(id, email, full_name, auth_user_id)"
-        )
+        .select(MEMBER_COLUMNS)
         .in("tenant_id", tenantIds),
     ]);
 
@@ -496,31 +295,7 @@ function WorkspaceCard({
   queue: QueueItem[];
   now: Date;
 }) {
-  const live = members.filter(
-    (m) => new Date(m.active_from) <= now && (!m.active_to || new Date(m.active_to) > now)
-  );
-
-  const fields: TaggedField[] = [
-    {
-      label: "DPO basis",
-      value: LEGAL_BASIS_LABELS[tenant.legal_basis],
-      confidence: "stated",
-      basis: "Answered by a person when this workspace was created.",
-    },
-    {
-      label: "People",
-      value: `${live.length} with access`,
-      confidence: "inferred",
-      basis:
-        "Counted from live memberships, which is who can reach the workspace — not a stated headcount for the company.",
-    },
-    {
-      label: "Sector",
-      value: null,
-      confidence: "unknown",
-      basis: "Never asked. Shown rather than omitted so the gap is visible.",
-    },
-  ];
+  const fields = taggedFieldsFor(tenant, members, now, LEGAL_BASIS_LABELS[tenant.legal_basis]);
 
   const blocked = queue.filter((i) => i.blockedBy);
   const byId = new Map(queue.map((i) => [i.id, i]));
@@ -538,7 +313,9 @@ function WorkspaceCard({
           </span>
           <div>
             <h3 className="font-semibold" data-testid="workspace-name">
-              {tenant.name}
+              <Link href={`/tenants/${tenant.id}`} className="hover:underline">
+                {tenant.name}
+              </Link>
             </h3>
             <dl className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-slate-600">
               {fields.map((field) => (
