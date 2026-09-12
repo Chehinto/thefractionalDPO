@@ -129,7 +129,18 @@ export default async function TenantPage({
         </div>
 
         <div className="flex flex-col items-end gap-2">
-          <ViewToggle tenantId={tenant.id} employeePreview={employeePreview} />
+          <div className="flex items-center gap-2">
+            {employeePreview ? null : (
+              <Link
+                href={`/tenants/${tenant.id}/register`}
+                className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+                data-testid="open-register"
+              >
+                Register
+              </Link>
+            )}
+            <ViewToggle tenantId={tenant.id} employeePreview={employeePreview} />
+          </div>
           {tenant.status !== "active" && !employeePreview ? (
             <span className="rounded bg-amber-100 px-2 py-1 text-xs font-medium text-amber-900">
               {tenant.status === "read_only" ? "Read-only" : "Suspended"}

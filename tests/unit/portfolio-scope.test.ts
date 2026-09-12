@@ -139,12 +139,22 @@ describe("the data the dashboard reads per workspace", () => {
     expect(data).toEqual([{ id: ownTenant }]);
   });
 
-  it("exposes no tier-2 scoped content, because none exists to expose", async () => {
-    // The employee preview renders nothing because there is nothing to render:
-    // no publishing or assignment table exists yet. Asserted against what the
-    // API actually exposes — the real attack surface — so that the day such a
-    // table is added, this fails and forces the preview to be re-examined
-    // rather than silently starting to have something to leak.
+  it("exposes only the tables the employee preview is known not to read", async () => {
+    // A tripwire, and it has already fired once: it was written when the only
+    // tables were the tenancy three, to force a re-examination of the employee
+    // preview the day anything tier-2-scoped appeared. `processing_activity`
+    // and `processing_activity_share` are that day.
+    //
+    // Re-examination, recorded here so the next person does not have to redo
+    // it: tier-2 scoped content now genuinely exists, but neither
+    // `EmployeePreview` reads it. Both render static markup with no query
+    // behind them — the preview shows the SHAPE of a staff member's screen,
+    // never anyone's actual assigned items, and the e2e suites assert zero
+    // data requests across the toggle. So the preview still cannot leak,
+    // because there is still nothing fetched for it to leak.
+    //
+    // If this fails again, do the same exercise: does the new table hold
+    // anything scoped to a person, and does any preview path read it?
     const response = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/rest/v1/`, {
       headers: {
         apikey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
@@ -154,8 +164,15 @@ describe("the data the dashboard reads per workspace", () => {
     const spec = (await response.json()) as { definitions?: Record<string, unknown> };
     const exposed = Object.keys(spec.definitions ?? {}).sort();
 
-    expect(exposed).toEqual(["memberships", "people", "tenants"]);
+    expect(exposed).toEqual([
+      "memberships",
+      "people",
+      "processing_activity",
+      "processing_activity_share",
+      "tenants",
+    ]);
   });
+
 });
 
 describe("tenant lifecycle state the dashboard reads", () => {
