@@ -1,5 +1,10 @@
 /**
- * The vendor-facing questionnaire (design resume §4, tier 3).
+ * The two pages a tier-3 link can open (design resume §4).
+ *
+ * One route, because a link holder should not have to know which kind of link
+ * they were sent — the token decides, and the purpose recorded against it
+ * decides which door opens. A questionnaire link reaching the register view, or
+ * the reverse, is refused by the database as if the token were unknown.
  *
  * The only page in this product served to someone with no account, no session
  * and no membership. Everything it can reach goes through the three definer
@@ -20,6 +25,7 @@
 import { notFound, redirect } from "next/navigation";
 import { hashScopedAccessToken, scopedAccessTokenFromParam } from "@/lib/scoped-access";
 import { anonClient } from "@/lib/supabase-server";
+import { RegisterView, type RegisterRow } from "./register-view";
 
 export const dynamic = "force-dynamic";
 
@@ -61,8 +67,34 @@ export default async function ScopedQuestionnairePage({
   const grant = (redeemed ?? [])[0] as GrantSummary | undefined;
   if (!grant) notFound();
 
-  // The database already refuses a mismatched purpose; this keeps the page from
-  // rendering a questionnaire shell for a link that will never fill it.
+  if (grant.purpose === "auditor_review") {
+    const { data: registerRows } = await supabase.rpc("scoped_register", {
+      p_token_hash: tokenHash,
+    });
+    return (
+      <main className="mx-auto max-w-3xl px-4 py-10">
+        <header className="border-b border-slate-200 pb-5">
+          <p className="text-xs uppercase tracking-widest text-slate-500">Record of processing</p>
+          <h1 className="mt-1 text-2xl font-semibold" data-testid="scoped-heading">
+            {grant.tenant_name}
+          </h1>
+          <p className="mt-2 text-sm text-slate-600" data-testid="scoped-intro">
+            Their Article 30 register, as approved by their Data Protection Officer. Draft entries
+            are not shown — an activity appears here once it has been approved.
+          </p>
+          <p className="mt-2 text-xs text-slate-500" data-testid="scoped-expiry">
+            This link stops working on {formatDate(grant.expires_at)}.
+          </p>
+        </header>
+        <RegisterView
+          tenantName={grant.tenant_name}
+          rows={(registerRows ?? []) as unknown as RegisterRow[]}
+        />
+      </main>
+    );
+  }
+
+  // Any purpose this page does not serve is answered as an unknown token.
   if (grant.purpose !== "vendor_questionnaire") notFound();
 
   const { data: questionRows } = await supabase.rpc("scoped_questionnaire", {

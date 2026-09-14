@@ -9,13 +9,12 @@ register foundation, the DPIA data/approval foundation, the AI-ready vendor
 evidence/questionnaire/reconciliation tables that feed DPIA review, the AI
 suggestion pipeline behind them (day-to-day intake, software discovery, staff
 vendor requests, the DPO review inbox), and tier-3 scoped access — hashed,
-expiring, revocable links that carry the vendor-facing questionnaire round-trip.
+expiring, revocable links carrying both the vendor-facing questionnaire
+round-trip and an auditor's read of the approved register.
 
 **Not built:** incidents, rights requests, training, and a tier-2 product
-surface for staff beyond submitting a vendor request. The `auditor_review`
-link purpose exists in the schema but has no read path yet, so only
-questionnaire links can be issued from the UI. Nothing sends email: a DPO
-copies a link and sends it themselves.
+surface for staff beyond submitting a vendor request. Nothing sends email: a
+DPO copies a link and sends it themselves.
 
 New features should land only after their access rules are expressed in RLS and
 tested.

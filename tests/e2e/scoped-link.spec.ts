@@ -202,3 +202,77 @@ test("a staff member cannot open the DPO's link management", async ({ page }) =>
   });
   expect(issued.status()).toBe(404);
 });
+
+test("an auditor link shows the approved register and nothing around it", async ({
+  page,
+  browser,
+}) => {
+  const dpo = await createActor("link-auditor-dpo");
+  const tenantId = await createTenant(dpo, "Auditable Ltd", "mandatory");
+
+  // One approved activity and one draft, so the page has something to exclude.
+  const approved = await adminClient()
+    .from("processing_activity")
+    .insert({
+      tenant_id: tenantId,
+      purpose: "Payroll administration",
+      purpose_confidence: "stated",
+      purpose_evidence: "Quoted from the internal payroll contract",
+      recipient_vendor: "Acme Payroll Ltd",
+      recipient_vendor_confidence: "stated",
+      role: "controller",
+      data_categories_ordinary: ["employment_data"],
+      data_categories_confidence: "stated",
+      data_subjects: ["employees"],
+      data_subjects_confidence: "stated",
+      retention: "7 years from end of employment",
+      retention_confidence: "stated",
+    })
+    .select("id")
+    .single();
+  await dpo.client.rpc("approve_processing_activity", {
+    p_caller_person_id: dpo.personId,
+    p_activity_id: approved.data!.id,
+  });
+  await adminClient().from("processing_activity").insert({
+    tenant_id: tenantId,
+    purpose: "Unapproved draft activity",
+    purpose_confidence: "inferred",
+    recipient_vendor: null,
+    recipient_vendor_confidence: "unknown",
+    role: "controller",
+    data_categories_confidence: "unknown",
+    data_subjects_confidence: "unknown",
+    retention_confidence: "unknown",
+  });
+
+  await signIn(page, dpo);
+  await page.goto(`/tenants/${tenantId}/links`);
+  await page.getByTestId("link-purpose").selectOption("auditor_review");
+  await page.getByTestId("link-label-input").fill("External auditor");
+  await page.getByTestId("issue-link").click();
+
+  const url = await page.getByTestId("issued-link-url").textContent();
+  const linkPath = new URL(url!).pathname;
+
+  const auditorContext = await browser.newContext();
+  const auditorPage = await auditorContext.newPage();
+  await auditorPage.goto(linkPath);
+
+  await expect(auditorPage.getByTestId("scoped-heading")).toContainText("Auditable Ltd");
+  await expect(auditorPage.getByTestId("scoped-register-row")).toHaveCount(1);
+  await expect(auditorPage.getByTestId("scoped-register-purpose")).toContainText(
+    "Payroll administration"
+  );
+
+  // The draft, the evidence quote and the confidence tags are all absent.
+  const body = await auditorPage.locator("body").innerText();
+  expect(body).not.toContain("Unapproved draft activity");
+  expect(body).not.toContain("Quoted from the internal payroll contract");
+  expect(body).not.toContain("inferred");
+
+  // And an auditor link cannot be pointed at the questionnaire door.
+  await expect(auditorPage.getByTestId("scoped-answer-input")).toHaveCount(0);
+
+  await auditorContext.close();
+});

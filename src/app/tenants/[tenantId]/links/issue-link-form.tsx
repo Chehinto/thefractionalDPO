@@ -39,6 +39,9 @@ export function IssueLinkForm({
   defaultDays: number;
   maxDays: number;
 }) {
+  const [purpose, setPurpose] = useState<"vendor_questionnaire" | "auditor_review">(
+    "vendor_questionnaire"
+  );
   const [issued, setIssued] = useState<Issued | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -57,6 +60,7 @@ export function IssueLinkForm({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           label: form.get("label"),
+          purpose,
           questionnaireId: form.get("questionnaireId"),
           days: Number(form.get("days")),
         }),
@@ -79,35 +83,59 @@ export function IssueLinkForm({
     }
   }
 
-  if (questionnaires.length === 0) {
-    return (
-      <p className="mt-3 text-sm text-slate-600" data-testid="no-sendable-questionnaires">
-        No approved questionnaires yet. A questionnaire has to be approved before it can be sent —
-        otherwise a vendor would be answering wording the DPO has not signed off.
-      </p>
-    );
-  }
-
   return (
     <div>
       <form onSubmit={onSubmit} className="mt-3 space-y-4" data-testid="issue-link-form">
         <div>
-          <label htmlFor="questionnaireId" className="block text-sm font-medium text-slate-800">
-            Questionnaire
+          <label htmlFor="purpose" className="block text-sm font-medium text-slate-800">
+            What is this link for?
           </label>
           <select
-            id="questionnaireId"
-            name="questionnaireId"
-            required
+            id="purpose"
+            name="purpose"
+            value={purpose}
+            onChange={(event) =>
+              setPurpose(event.target.value as "vendor_questionnaire" | "auditor_review")
+            }
             className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm"
+            data-testid="link-purpose"
           >
-            {questionnaires.map((questionnaire) => (
-              <option key={questionnaire.id} value={questionnaire.id}>
-                {questionnaire.vendorName}
-              </option>
-            ))}
+            <option value="vendor_questionnaire">A vendor answering a questionnaire</option>
+            <option value="auditor_review">An auditor reading the register</option>
           </select>
+          <p className="mt-1 text-xs text-slate-500">
+            {purpose === "vendor_questionnaire"
+              ? "They see only the questions on that questionnaire, and can answer them."
+              : "They see only approved register entries. No drafts, no DPIA, no evidence, no names."}
+          </p>
         </div>
+
+        {purpose === "vendor_questionnaire" ? (
+          questionnaires.length === 0 ? (
+            <p className="text-sm text-slate-600" data-testid="no-sendable-questionnaires">
+              No approved questionnaires yet. A questionnaire has to be approved before it can be
+              sent — otherwise a vendor would be answering wording the DPO has not signed off.
+            </p>
+          ) : (
+            <div>
+              <label htmlFor="questionnaireId" className="block text-sm font-medium text-slate-800">
+                Questionnaire
+              </label>
+              <select
+                id="questionnaireId"
+                name="questionnaireId"
+                required
+                className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm"
+              >
+                {questionnaires.map((questionnaire) => (
+                  <option key={questionnaire.id} value={questionnaire.id}>
+                    {questionnaire.vendorName}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )
+        ) : null}
 
         <div>
           <label htmlFor="label" className="block text-sm font-medium text-slate-800">
@@ -156,7 +184,7 @@ export function IssueLinkForm({
 
         <button
           type="submit"
-          disabled={busy}
+          disabled={busy || (purpose === "vendor_questionnaire" && questionnaires.length === 0)}
           className="w-full rounded bg-slate-900 px-3 py-2 text-sm text-white disabled:opacity-60"
           data-testid="issue-link"
         >

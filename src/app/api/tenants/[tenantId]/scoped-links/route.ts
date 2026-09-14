@@ -38,13 +38,18 @@ export async function POST(
 
     const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
     const label = typeof body.label === "string" ? body.label.trim() : "";
+    const purpose = body.purpose === "auditor_review" ? "auditor_review" : "vendor_questionnaire";
     const questionnaireId = typeof body.questionnaireId === "string" ? body.questionnaireId : "";
     const days = Number(body.days);
 
     if (!label) {
       return NextResponse.json({ error: "Say who this link is for" }, { status: 400 });
     }
-    if (!questionnaireId) {
+    // The schema enforces this pairing too — a questionnaire grant names its
+    // questionnaire and an auditor grant must not, so a read link can never be
+    // pointed at a write path. Checked here as well so the answer is a sentence
+    // rather than a constraint violation.
+    if (purpose === "vendor_questionnaire" && !questionnaireId) {
       return NextResponse.json({ error: "Choose a questionnaire to send" }, { status: 400 });
     }
     if (!Number.isFinite(days) || days < 1 || days > MAX_SCOPED_ACCESS_DAYS) {
@@ -59,11 +64,11 @@ export async function POST(
     const { data, error } = await supabase.rpc("issue_scoped_access", {
       p_caller_person_id: access.session.personId,
       p_tenant_id: tenantId,
-      p_purpose: "vendor_questionnaire",
+      p_purpose: purpose,
       p_token_hash: tokenHash,
       p_label: label,
       p_expires_at: scopedAccessExpiry(days),
-      p_vendor_questionnaire_id: questionnaireId,
+      p_vendor_questionnaire_id: purpose === "vendor_questionnaire" ? questionnaireId : null,
     });
 
     if (error) {
