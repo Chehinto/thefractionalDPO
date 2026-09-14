@@ -20,4 +20,13 @@ export default defineConfig({
   resolve: {
     alias: { "@": path.resolve(__dirname, "src") },
   },
+  ssr: {
+    // `server-only` resolves through export conditions: `react-server` gets an
+    // empty module, anything else gets one that throws on import. Next applies
+    // that condition on the server; Vitest does not, so every module carrying
+    // the guard would fail to import here. Matching Next's condition keeps the
+    // guard meaningful in the app and importable in tests, instead of the
+    // alternative of dropping the guard to make tests run.
+    resolve: { conditions: ["react-server"] },
+  },
 });

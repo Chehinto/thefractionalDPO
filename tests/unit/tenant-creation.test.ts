@@ -8,7 +8,7 @@
  */
 
 import { beforeAll, describe, expect, it } from "vitest";
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { randomUUID } from "node:crypto";
 import { adminClient, createActor, createTenant, type Actor } from "../support/tenancy-fixtures";
 
@@ -214,15 +214,35 @@ describe("what creation grants", () => {
     const { data: orphans } = await adminClient().rpc("my_memberships");
     void orphans;
 
-    const { data: tenants } = await adminClient().from("tenants").select("id");
-    const { data: memberships } = await adminClient().from("memberships").select("tenant_id");
+    const admin = adminClient();
+    const tenants = await fetchAll<{ id: string }>(admin, "tenants", "id");
+    const memberships = await fetchAll<{ tenant_id: string }>(admin, "memberships", "tenant_id");
     const withMembers = new Set((memberships ?? []).map((m) => m.tenant_id));
 
-    for (const tenant of tenants ?? []) {
+    for (const tenant of tenants) {
       expect(withMembers.has(tenant.id)).toBe(true);
     }
   });
 });
+
+async function fetchAll<T>(
+  client: SupabaseClient,
+  table: "tenants" | "memberships",
+  columns: string
+): Promise<T[]> {
+  const pageSize = 1_000;
+  const rows: T[] = [];
+
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await client
+      .from(table)
+      .select(columns)
+      .range(from, from + pageSize - 1);
+    if (error) throw new Error(`fetchAll ${table} failed: ${error.message}`);
+    rows.push(...((data ?? []) as T[]));
+    if (!data || data.length < pageSize) return rows;
+  }
+}
 
 describe("identity reconciliation on signup", () => {
   it("claims an unclaimed roster row instead of creating a second person", async () => {

@@ -13,11 +13,11 @@
  *
  * WHAT IS IN THE QUEUE, AND WHAT IS NOT
  *
- * The register, DPIAs, incidents, rights requests and training do not exist as
- * tables. Nothing here invents them. Every item below is derived from a row
- * that is already in the schema, so the queue is short and true rather than
- * long and illustrative. When those tables arrive they add `QueueItem`s to the
- * same list; the ordering and dependency rules do not change.
+ * Incidents, rights requests and training do not exist as tables. Nothing here
+ * invents them. Every item below is derived from a row that is already in the
+ * schema, so the queue is short and true rather than long and illustrative.
+ * When those tables arrive they add `QueueItem`s to the same list; the ordering
+ * and dependency rules do not change.
  */
 
 import type { LegalBasis } from "./legal-basis";
@@ -72,6 +72,33 @@ export interface TenantRow {
   created_at: string;
 }
 
+/**
+ * Just enough of a register row to tell whether it still needs a DPIA.
+ * The register screen reads the full row; the queue only needs this.
+ */
+export interface ActivityRiskRow {
+  id: string;
+  tenant_id: string;
+  purpose: string;
+  dpia_risk_flag: boolean;
+  /** Whether any DPIA references this activity, of any status. */
+  has_dpia: boolean;
+}
+
+/**
+ * AI output that is waiting for DPO review.
+ *
+ * The queue deliberately needs only a count and broad kind. The suggestion
+ * itself carries the source excerpt and confidence score; duplicating that
+ * into the queue would make a summary screen look like the review screen.
+ */
+export interface AiSuggestionRow {
+  id: string;
+  tenant_id: string;
+  status: "pending_dpo_review" | "approved";
+  kind: string;
+}
+
 export interface MemberRow {
   id: string;
   tenant_id: string;
@@ -101,6 +128,12 @@ export const TENANT_COLUMNS = "id, name, status, legal_basis, status_changed_at,
 export const MEMBER_COLUMNS =
   "id, tenant_id, tier, active_from, active_to, " +
   "person:people!memberships_person_id_fkey(id, email, full_name, auth_user_id)";
+
+/** What the queue needs from the register, on both screens. */
+export const ACTIVITY_RISK_COLUMNS = "id, tenant_id, purpose, dpia_risk_flag";
+
+/** What the queue needs from cross-product AI suggestions, on both screens. */
+export const AI_SUGGESTION_COLUMNS = "id, tenant_id, status, kind";
 
 const DAY = 86_400_000;
 
@@ -161,7 +194,13 @@ export function liveMembers(members: MemberRow[], now: Date): MemberRow[] {
  * rather than the boundary — the boundary is RLS, and then the caller's query.
  * Each branch names the design-resume rule it implements.
  */
-export function queueFor(tenant: TenantRow, members: MemberRow[], now: Date): QueueItem[] {
+export function queueFor(
+  tenant: TenantRow,
+  members: MemberRow[],
+  now: Date,
+  activities: ActivityRiskRow[] = [],
+  aiSuggestions: AiSuggestionRow[] = []
+): QueueItem[] {
   const items: QueueItem[] = [];
   const live = liveMembers(
     members.filter((m) => m.tenant_id === tenant.id),
@@ -225,6 +264,69 @@ export function queueFor(tenant: TenantRow, members: MemberRow[], now: Date): Qu
     });
   }
 
+  // Art. 35 — special-category processing recorded with no assessment against
+  // it. `dpia_risk_flag` is a generated column on the register, so this cannot
+  // drift out of step with what the activity actually records.
+  //
+  // Undated but weighted above the governance items: a missing DPIA on
+  // high-risk processing is not a gap in the paperwork, it is processing
+  // happening now that Art. 35 says should have been assessed first. It still
+  // sorts below anything with a real clock, because an item with a deadline is
+  // the one that stops being possible.
+  const needAssessment = activities.filter(
+    (a) => a.tenant_id === tenant.id && a.dpia_risk_flag && !a.has_dpia
+  );
+  if (needAssessment.length > 0) {
+    items.push({
+      id: `${tenant.id}:dpia-needed`,
+      title:
+        needAssessment.length === 1
+          ? "DPIA needed"
+          : `${needAssessment.length} activities need a DPIA`,
+      detail:
+        needAssessment.length === 1
+          ? `"${needAssessment[0].purpose}" records special-category data and has no assessment against it.`
+          : `${needAssessment.length} register entries record special-category data with no assessment against them.`,
+      where: "Assessments",
+      waitingOn: "You",
+      owner: "you",
+      daysLeft: null,
+      clock: "Not started",
+      action: "Open",
+      severity: 35,
+    });
+  }
+
+  // AI is useful only while it is still reviewable. A pending suggestion is
+  // surfaced as DPO work; an approved one disappears from the queue because the
+  // review stamp has happened, even though applying it may remain a separate
+  // product action.
+  const pendingAi = aiSuggestions.filter(
+    (s) => s.tenant_id === tenant.id && s.status === "pending_dpo_review"
+  );
+  if (pendingAi.length > 0) {
+    const kinds = new Set(pendingAi.map((s) => s.kind));
+    items.push({
+      id: `${tenant.id}:ai-suggestions`,
+      title:
+        pendingAi.length === 1
+          ? "AI suggestion needs review"
+          : `${pendingAi.length} AI suggestions need review`,
+      detail:
+        kinds.size === 1
+          ? `A ${formatAiKind([...kinds][0])} suggestion has source text and a confidence score ready for DPO review.`
+          : `${kinds.size} AI-assisted areas have source text and confidence scores ready for DPO review.`,
+      where: "AI review",
+      waitingOn: "You",
+      owner: "you",
+      daysLeft: null,
+      clock: "Pending review",
+      action: "Review",
+      severity: 28,
+      blockedBy: tenant.status === "read_only" ? `${tenant.id}:read-only` : undefined,
+    });
+  }
+
   // §4 tier 2 — the roster is the base object precisely so you can prove who
   // did NOT respond. Someone who never signed in cannot acknowledge anything,
   // so they are a hole in every future attestation, not just a pending invite.
@@ -257,6 +359,10 @@ export function queueFor(tenant: TenantRow, members: MemberRow[], now: Date): Qu
   }
 
   return items.sort(byUrgency);
+}
+
+function formatAiKind(kind: string): string {
+  return kind.replaceAll("_", " ");
 }
 
 /**

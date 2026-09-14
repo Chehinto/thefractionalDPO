@@ -4,9 +4,11 @@ A GDPR compliance workspace where the client company â€” not the DPO's account â
 is the tenant. See `docs/fractional-dpo-design-resume.md` for the product
 architecture; engineering ground rules are in `CLAUDE.md`.
 
-**Built so far: the tenancy layer only.** No register, no DPIA, no portfolio
-dashboard. Those come after this layer is proven, because everything else sits
-on top of it.
+**Built so far:** the tenancy layer, portfolio/workspace views, the Art. 30
+register foundation, the DPIA data/approval foundation, and the AI-ready vendor
+evidence/questionnaire/reconciliation tables that feed DPIA review. Incidents,
+rights requests, training and the vendor-facing link/UI are still unbuilt; they
+should land only after their access rules are expressed in RLS and tested.
 
 ## Running it
 

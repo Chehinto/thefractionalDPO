@@ -139,22 +139,27 @@ describe("the data the dashboard reads per workspace", () => {
     expect(data).toEqual([{ id: ownTenant }]);
   });
 
-  it("exposes only the tables the employee preview is known not to read", async () => {
+  it("keeps the exposed-table tripwire current as scoped tables are added", async () => {
     // A tripwire, and it has already fired once: it was written when the only
-    // tables were the tenancy three, to force a re-examination of the employee
-    // preview the day anything tier-2-scoped appeared. `processing_activity`
-    // and `processing_activity_share` are that day.
+    // tables were the tenancy three, to force a re-examination of dashboard and
+    // public UI paths the day anything scoped or DPO-only appeared.
+    // `processing_activity`, `processing_activity_share`, `dpia`, the
+    // vendor AI/DPIA evidence tables, generated document draft tables,
+    // software-discovery signals, the staff-submittable vendor request table
+    // and the cross-product AI suggestion rail are those days.
     //
     // Re-examination, recorded here so the next person does not have to redo
-    // it: tier-2 scoped content now genuinely exists, but neither
-    // `EmployeePreview` reads it. Both render static markup with no query
-    // behind them — the preview shows the SHAPE of a staff member's screen,
-    // never anyone's actual assigned items, and the e2e suites assert zero
-    // data requests across the toggle. So the preview still cannot leak,
-    // because there is still nothing fetched for it to leak.
+    // it: tier-2 scoped content, DPO-only DPIA records, vendor documents,
+    // AI-extracted facts, questionnaires, responses, reconciliation drafts,
+    // generated document drafts/sections, software-discovery signals, vendor
+    // requests, generic AI suggestions and AI usage rows now genuinely exist,
+    // The product no longer exposes a DPO/employee preview switch. The
+    // portfolio dashboard reads DPO-scoped data only after `requireSession`,
+    // then renders tenant-level summaries instead of source-level details.
     //
     // If this fails again, do the same exercise: does the new table hold
-    // anything scoped to a person, and does any preview path read it?
+    // anything scoped to a person, and does any portfolio/public path read or
+    // render it at too-specific a level?
     const response = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/rest/v1/`, {
       headers: {
         apikey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
@@ -165,11 +170,24 @@ describe("the data the dashboard reads per workspace", () => {
     const exposed = Object.keys(spec.definitions ?? {}).sort();
 
     expect(exposed).toEqual([
+      "ai_call",
+      "ai_suggestion",
+      "dpia",
+      "generated_document_draft",
+      "generated_document_section",
       "memberships",
       "people",
       "processing_activity",
       "processing_activity_share",
+      "software_discovery_signal",
       "tenants",
+      "vendor_document",
+      "vendor_dpia_reconciliation",
+      "vendor_extracted_fact",
+      "vendor_questionnaire",
+      "vendor_questionnaire_question",
+      "vendor_questionnaire_response",
+      "vendor_request",
     ]);
   });
 

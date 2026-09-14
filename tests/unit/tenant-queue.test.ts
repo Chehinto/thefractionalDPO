@@ -17,6 +17,7 @@ import {
   type MemberRow,
   type QueueItem,
   type TenantRow,
+  type AiSuggestionRow,
 } from "@/lib/tenant-queue";
 
 const NOW = new Date("2026-09-11T12:00:00Z");
@@ -42,6 +43,16 @@ function member(overrides: Partial<MemberRow> = {}): MemberRow {
     active_from: new Date(NOW.getTime() - 30 * DAY).toISOString(),
     active_to: null,
     person: { id: "p1", email: "dpo@example.test", full_name: "A DPO", auth_user_id: "auth-1" },
+    ...overrides,
+  };
+}
+
+function aiSuggestion(overrides: Partial<AiSuggestionRow> = {}): AiSuggestionRow {
+  return {
+    id: `ai-${Math.random().toString(36).slice(2)}`,
+    tenant_id: "tenant-a",
+    status: "pending_dpo_review",
+    kind: "dpia_mitigation",
     ...overrides,
   };
 }
@@ -208,6 +219,153 @@ describe("blocking dependencies", () => {
     for (const item of queue) {
       if (item.blockedBy) expect(ids.has(item.blockedBy)).toBe(true);
     }
+  });
+});
+
+describe("DPIA gaps", () => {
+  it("adds an assessment item when a risk-flagged activity has no DPIA", () => {
+    const queue = queueFor(tenant(), [member(), member({ id: "second-dpo" })], NOW, [
+      {
+        id: "activity-a",
+        tenant_id: "tenant-a",
+        purpose: "Occupational health records",
+        dpia_risk_flag: true,
+        has_dpia: false,
+      },
+    ]);
+
+    expect(queue).toHaveLength(1);
+    expect(queue[0]).toMatchObject({
+      id: "tenant-a:dpia-needed",
+      title: "DPIA needed",
+      where: "Assessments",
+      owner: "you",
+      clock: "Not started",
+      severity: 35,
+    });
+    expect(queue[0].detail).toContain("Occupational health records");
+  });
+
+  it("does not add one when the activity already has an assessment", () => {
+    const queue = queueFor(tenant(), [member(), member({ id: "second-dpo" })], NOW, [
+      {
+        id: "activity-a",
+        tenant_id: "tenant-a",
+        purpose: "Occupational health records",
+        dpia_risk_flag: true,
+        has_dpia: true,
+      },
+    ]);
+
+    expect(queue).toEqual([]);
+  });
+
+  it("ignores another tenant's register rows", () => {
+    const queue = queueFor(tenant(), [member(), member({ id: "second-dpo" })], NOW, [
+      {
+        id: "activity-b",
+        tenant_id: "tenant-b",
+        purpose: "Foreign special-category data",
+        dpia_risk_flag: true,
+        has_dpia: false,
+      },
+    ]);
+
+    expect(queue).toEqual([]);
+  });
+
+  it("summarises several missing assessments without hiding the count", () => {
+    const queue = queueFor(tenant(), [member(), member({ id: "second-dpo" })], NOW, [
+      {
+        id: "activity-a",
+        tenant_id: "tenant-a",
+        purpose: "Occupational health records",
+        dpia_risk_flag: true,
+        has_dpia: false,
+      },
+      {
+        id: "activity-b",
+        tenant_id: "tenant-a",
+        purpose: "Criminal record checks",
+        dpia_risk_flag: true,
+        has_dpia: false,
+      },
+    ]);
+
+    expect(queue[0].title).toBe("2 activities need a DPIA");
+    expect(queue[0].detail).toContain("2 register entries");
+  });
+});
+
+describe("AI suggestions", () => {
+  it("adds review work when AI suggestions are pending", () => {
+    const queue = queueFor(
+      tenant(),
+      [member(), member({ id: "second-dpo" })],
+      NOW,
+      [],
+      [aiSuggestion()]
+    );
+
+    expect(queue).toHaveLength(1);
+    expect(queue[0]).toMatchObject({
+      id: "tenant-a:ai-suggestions",
+      title: "AI suggestion needs review",
+      where: "AI review",
+      waitingOn: "You",
+      owner: "you",
+      clock: "Pending review",
+      action: "Review",
+      severity: 28,
+    });
+    expect(queue[0].detail).toContain("source text");
+    expect(queue[0].detail).toContain("confidence score");
+  });
+
+  it("summarises several AI-assisted areas without listing hidden evidence", () => {
+    const queue = queueFor(
+      tenant(),
+      [member(), member({ id: "second-dpo" })],
+      NOW,
+      [],
+      [
+        aiSuggestion({ kind: "dpia_mitigation" }),
+        aiSuggestion({ kind: "privacy_notice_section" }),
+      ]
+    );
+
+    expect(queue[0].title).toBe("2 AI suggestions need review");
+    expect(queue[0].detail).toContain("2 AI-assisted areas");
+    expect(queue[0].detail).not.toContain("ScreenCo");
+  });
+
+  it("ignores approved AI suggestions and suggestions from another tenant", () => {
+    const queue = queueFor(
+      tenant(),
+      [member(), member({ id: "second-dpo" })],
+      NOW,
+      [],
+      [
+        aiSuggestion({ status: "approved" }),
+        aiSuggestion({ tenant_id: "tenant-b" }),
+      ]
+    );
+
+    expect(queue).toEqual([]);
+  });
+
+  it("marks AI review as blocked while the workspace is read-only", () => {
+    const queue = queueFor(
+      tenant({ status: "read_only" }),
+      [member(), member({ id: "second-dpo" })],
+      NOW,
+      [],
+      [aiSuggestion()]
+    );
+    const review = queue.find((i) => i.title === "AI suggestion needs review");
+    const readOnly = queue.find((i) => i.title === "Workspace is read-only");
+
+    expect(review?.blockedBy).toBe(readOnly?.id);
   });
 });
 

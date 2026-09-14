@@ -274,64 +274,10 @@ test.describe("the queue on this screen", () => {
   });
 });
 
-test.describe("the view toggle, on the same rules as the portfolio", () => {
-  test("employee view drops the queue and the facts, and fetches nothing", async ({ page }) => {
-    const dpo = await createActor("tv-toggle");
-    const tenantId = await createTenant(dpo, "Toggled Ltd", "mandatory");
-    await adminClient().from("tenants").update({ status: "read_only" }).eq("id", tenantId);
-
-    await signIn(page, dpo);
-    await page.goto(`/tenants/${tenantId}`);
-    await expect(page.getByTestId("queue-row")).not.toHaveCount(0);
-
-    const requests: string[] = [];
-    page.on("request", (r) => requests.push(r.url()));
-
-    await page.getByTestId("view-employee").click();
-    await expect(page.getByTestId("employee-preview")).toBeVisible();
-
-    // Nothing DPO-shaped is on screen.
-    await expect(page.getByTestId("queue-row")).toHaveCount(0);
-    await expect(page.getByTestId("tenant-facts")).toHaveCount(0);
-
-    // No query stands behind the preview, so there is nothing fetched to leak.
-    expect(requests.filter((url) => /\/rest\/v1\/|\/api\//.test(url))).toEqual([]);
-
-    // What the SERVER sends for this URL is the property that matters. After a
-    // client-side navigation the previous page's RSC payload is still sitting
-    // in the document — that is this DPO's own data being re-rendered in their
-    // own tab, not a leak, but it means the raw DOM is the wrong thing to
-    // assert on. A fresh request is what a staff member's browser would make.
-    const fresh = await page.goto(`/tenants/${tenantId}?view=employee`);
-    expect(fresh?.status()).toBe(200);
-    const serverHtml = await page.content();
-    expect(serverHtml).not.toContain("Workspace is read-only");
-    expect(serverHtml).not.toContain("DPO basis");
-    expect(serverHtml).not.toContain("Billing");
-  });
-
-  test("cannot be widened into an access switch by URL parameters", async ({ page }) => {
-    const dpo = await createActor("tv-toggle-params");
-    const tenantId = await createTenant(dpo, "Params Ltd", "contractual");
-    await signIn(page, dpo);
-
-    for (const query of [
-      "?view=employee&filter=you",
-      "?view=employee&tier=active_dpo",
-      "?view=employee&scope=all",
-    ]) {
-      await page.goto(`/tenants/${tenantId}${query}`);
-      await expect(page.getByTestId("employee-preview")).toBeVisible();
-      await expect(page.getByTestId("queue-row")).toHaveCount(0);
-      expect(await page.content()).not.toContain("DPO basis");
-    }
-  });
-
-  test("does not let a staff member into the page in either view", async ({ page }) => {
-    // The toggle renders less, never more. It cannot be used to get in, because
-    // the access decision happens before either view is chosen.
-    const staff = await createActor("tv-toggle-staff");
-    const employer = await createActor("tv-toggle-employer");
+test.describe("staff access", () => {
+  test("does not let a staff member into the DPO workspace", async ({ page }) => {
+    const staff = await createActor("tv-staff-closed");
+    const employer = await createActor("tv-staff-closed-employer");
     const tenantId = await createTenant(employer, "Closed To Them Ltd", "mandatory");
     await employer.client.rpc("add_member", {
       p_tenant_id: tenantId,
@@ -346,5 +292,17 @@ test.describe("the view toggle, on the same rules as the portfolio", () => {
       expect(response?.status()).toBe(404);
       expect(await page.content()).not.toContain("Closed To Them Ltd");
     }
+  });
+
+  test("does not render a DPO/employee view switch", async ({ page }) => {
+    const dpo = await createActor("tv-no-toggle");
+    const tenantId = await createTenant(dpo, "No Toggle Ltd", "contractual");
+
+    await signIn(page, dpo);
+    await page.goto(`/tenants/${tenantId}`);
+
+    await expect(page.getByTestId("view-dpo")).toHaveCount(0);
+    await expect(page.getByTestId("view-employee")).toHaveCount(0);
+    await expect(page.getByTestId("employee-preview")).toHaveCount(0);
   });
 });

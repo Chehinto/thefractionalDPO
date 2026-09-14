@@ -25,6 +25,8 @@
  * regression in one is not sufficient to leak a tenant.
  */
 
+import "server-only";
+
 import { NextResponse } from "next/server";
 import { requestClient } from "./supabase-server";
 

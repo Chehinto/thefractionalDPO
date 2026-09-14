@@ -1,11 +1,11 @@
 /**
  * One workspace, in full — the level below the portfolio.
  *
- * Everything on this screen comes from the live schema. There is no register,
- * DPIA, incidents, rights or training table yet, so this page does not pretend
- * otherwise: no tab navigation and no stat tiles, because every figure in them
- * would be invented. The queue holds the same four governance-derived items the
- * portfolio computes, scoped to this workspace.
+ * Everything on this screen comes from the live schema. There is no incidents,
+ * rights or training table yet, so this page does not pretend otherwise: no tab
+ * navigation and no stat tiles, because every figure in them would be invented.
+ * The queue holds the same governance and DPIA-gap items the portfolio computes,
+ * scoped to this workspace.
  *
  * ACCESS
  *
@@ -31,6 +31,8 @@ import { requireMembership, TenantAccessError } from "@/lib/tenant-access";
 import { requestClient } from "@/lib/supabase-server";
 import { LEGAL_BASIS_LABELS } from "@/lib/legal-basis";
 import {
+  ACTIVITY_RISK_COLUMNS,
+  AI_SUGGESTION_COLUMNS,
   applyOwnerFilter,
   MEMBER_COLUMNS,
   OWNER_FILTERS,
@@ -38,6 +40,8 @@ import {
   queueFor,
   taggedFieldsFor,
   TENANT_COLUMNS,
+  type AiSuggestionRow,
+  type ActivityRiskRow,
   type Confidence,
   type MemberRow,
   type OwnerFilter,
@@ -51,11 +55,10 @@ export default async function TenantPage({
   searchParams,
 }: {
   params: Promise<{ tenantId: string }>;
-  searchParams: Promise<{ view?: string; filter?: string }>;
+  searchParams: Promise<{ filter?: string }>;
 }) {
   const { tenantId } = await params;
-  const { view, filter } = await searchParams;
-  const employeePreview = view === "employee";
+  const { filter } = await searchParams;
 
   try {
     await requireMembership(tenantId, { tier: "active_dpo" });
@@ -69,9 +72,16 @@ export default async function TenantPage({
   }
 
   const supabase = await requestClient();
-  const [tenantResult, memberResult] = await Promise.all([
+  const [tenantResult, memberResult, activityResult, dpiaResult, aiSuggestionResult] = await Promise.all([
     supabase.from("tenants").select(TENANT_COLUMNS).eq("id", tenantId).maybeSingle(),
     supabase.from("memberships").select(MEMBER_COLUMNS).eq("tenant_id", tenantId),
+    supabase.from("processing_activity").select(ACTIVITY_RISK_COLUMNS).eq("tenant_id", tenantId),
+    supabase.from("dpia").select("processing_activity_id").eq("tenant_id", tenantId),
+    supabase
+      .from("ai_suggestion")
+      .select(AI_SUGGESTION_COLUMNS)
+      .eq("tenant_id", tenantId)
+      .eq("status", "pending_dpo_review"),
   ]);
 
   // RLS says no even though the membership check said yes: treat it as the
@@ -80,12 +90,29 @@ export default async function TenantPage({
 
   const tenant = tenantResult.data as unknown as TenantRow;
   const members = (memberResult.data ?? []) as unknown as MemberRow[];
+  const assessedActivityIds = new Set(
+    ((dpiaResult.data ?? []) as { processing_activity_id: string }[]).map(
+      (row) => row.processing_activity_id
+    )
+  );
+  const activities = ((activityResult.data ?? []) as Omit<ActivityRiskRow, "has_dpia">[]).map(
+    (activity) => ({
+      ...activity,
+      has_dpia: assessedActivityIds.has(activity.id),
+    })
+  );
+  const aiSuggestions = (aiSuggestionResult.data ?? []) as unknown as AiSuggestionRow[];
   // Surfaced rather than swallowed. "Nothing needs you" and "we could not find
   // out" must not look the same on a compliance screen.
-  const loadError = memberResult.error?.message ?? null;
+  const loadError =
+    memberResult.error?.message ??
+    activityResult.error?.message ??
+    dpiaResult.error?.message ??
+    aiSuggestionResult.error?.message ??
+    null;
 
   const now = new Date();
-  const queue = queueFor(tenant, members, now);
+  const queue = queueFor(tenant, members, now, activities, aiSuggestions);
   const activeFilter = toFilter(filter);
   const visible = applyOwnerFilter(queue, activeFilter);
   const fields = taggedFieldsFor(tenant, members, now, LEGAL_BASIS_LABELS[tenant.legal_basis]);
@@ -111,37 +138,67 @@ export default async function TenantPage({
             <h1 className="text-2xl font-semibold" data-testid="tenant-name">
               {tenant.name}
             </h1>
-            {employeePreview ? null : (
-              <dl
-                className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-slate-600"
-                data-testid="tenant-facts"
-              >
-                {fields.map((field) => (
-                  <div key={field.label} className="flex items-center gap-1.5" title={field.basis}>
-                    <dt className="text-slate-500">{field.label}:</dt>
-                    <dd>{field.value ?? "Not recorded"}</dd>
-                    <ConfidenceTag confidence={field.confidence} />
-                  </div>
-                ))}
-              </dl>
-            )}
+            <dl
+              className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-slate-600"
+              data-testid="tenant-facts"
+            >
+              {fields.map((field) => (
+                <div key={field.label} className="flex items-center gap-1.5" title={field.basis}>
+                  <dt className="text-slate-500">{field.label}:</dt>
+                  <dd>{field.value ?? "Not recorded"}</dd>
+                  <ConfidenceTag confidence={field.confidence} />
+                </div>
+              ))}
+            </dl>
           </div>
         </div>
 
         <div className="flex flex-col items-end gap-2">
           <div className="flex items-center gap-2">
-            {employeePreview ? null : (
-              <Link
-                href={`/tenants/${tenant.id}/register`}
-                className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
-                data-testid="open-register"
-              >
-                Register
-              </Link>
-            )}
-            <ViewToggle tenantId={tenant.id} employeePreview={employeePreview} />
+            <Link
+              href={`/tenants/${tenant.id}/intake`}
+              className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+              data-testid="open-intake"
+            >
+              Intake
+            </Link>
+            <Link
+              href={`/tenants/${tenant.id}/vendors`}
+              className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+              data-testid="open-vendors"
+            >
+              Vendors
+            </Link>
+            <Link
+              href={`/tenants/${tenant.id}/software-discovery`}
+              className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+              data-testid="open-software-discovery"
+            >
+              Discovery
+            </Link>
+            <Link
+              href={`/tenants/${tenant.id}/ai-review`}
+              className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+              data-testid="open-ai-review"
+            >
+              AI review
+            </Link>
+            <Link
+              href={`/tenants/${tenant.id}/request-vendor`}
+              className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+              data-testid="request-vendor"
+            >
+              Request vendor
+            </Link>
+            <Link
+              href={`/tenants/${tenant.id}/register`}
+              className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+              data-testid="open-register"
+            >
+              Register
+            </Link>
           </div>
-          {tenant.status !== "active" && !employeePreview ? (
+          {tenant.status !== "active" ? (
             <span className="rounded bg-amber-100 px-2 py-1 text-xs font-medium text-amber-900">
               {tenant.status === "read_only" ? "Read-only" : "Suspended"}
             </span>
@@ -149,9 +206,7 @@ export default async function TenantPage({
         </div>
       </header>
 
-      {employeePreview ? (
-        <EmployeePreview />
-      ) : loadError ? (
+      {loadError ? (
         <section className="py-10" data-testid="tenant-error">
           <div className="rounded border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-900">
             <strong>This list could not be loaded, so it is not showing you anything.</strong>
@@ -269,10 +324,72 @@ export default async function TenantPage({
                 ) : null}
               </p>
             </>
-          ) : null}
+          ) : (
+            <FirstRunActions tenantId={tenant.id} />
+          )}
         </>
       )}
     </main>
+  );
+}
+
+function FirstRunActions({ tenantId }: { tenantId: string }) {
+  const actions = [
+    {
+      href: `/tenants/${tenantId}/intake`,
+      label: "Capture intake",
+      detail: "Turn a day-to-day description into a reviewable register suggestion.",
+      testId: "first-run-intake",
+    },
+    {
+      href: `/tenants/${tenantId}/software-discovery`,
+      label: "Upload discovery export",
+      detail: "Use accounting or SSO CSV/TSV exports to find likely software processors.",
+      testId: "first-run-discovery",
+    },
+    {
+      href: `/tenants/${tenantId}/vendors`,
+      label: "Add vendor evidence",
+      detail: "Review vendor policy text with source-backed AI notes.",
+      testId: "first-run-vendors",
+    },
+    {
+      href: `/tenants/${tenantId}/request-vendor`,
+      label: "Request vendor review",
+      detail: "Submit a new vendor request without exposing the DPO workspace.",
+      testId: "first-run-request-vendor",
+    },
+    {
+      href: `/tenants/${tenantId}/ai-review`,
+      label: "Review AI suggestions",
+      detail: "Inspect response text, source excerpts and confidence scores.",
+      testId: "first-run-ai-review",
+    },
+    {
+      href: `/tenants/${tenantId}/register`,
+      label: "Open register",
+      detail: "View processing activities once reviewed drafts exist.",
+      testId: "first-run-register",
+    },
+  ];
+
+  return (
+    <section className="mt-6" data-testid="first-run-actions">
+      <h3 className="text-sm font-semibold text-slate-900">Start work</h3>
+      <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {actions.map((action) => (
+          <Link
+            key={action.href}
+            href={action.href}
+            data-testid={action.testId}
+            className="rounded border border-slate-200 p-4 text-sm hover:border-slate-300 hover:bg-slate-50"
+          >
+            <span className="font-medium text-slate-900">{action.label}</span>
+            <span className="mt-1 block leading-6 text-slate-600">{action.detail}</span>
+          </Link>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -291,78 +408,6 @@ function SignInPrompt() {
         </Link>
       </p>
     </main>
-  );
-}
-
-/**
- * The toggle, on the same terms as the portfolio's.
- *
- * Two server-rendered links reading a URL parameter. No client state, no second
- * query, and it can only ever render less of what this session already loaded.
- * It is not an access switch: a staff member does not reach this page by
- * removing it — they never got past `requireMembership` in the first place.
- *
- * The one difference from the portfolio: the workspace NAME stays visible here.
- * The portfolio hides names in employee view because the list of companies a
- * DPO advises is itself the thing being previewed away. On this page the caller
- * is already an Active DPO of this one workspace, and a staff member of it
- * would plainly see its name, so hiding it would make the preview less honest
- * rather than more careful. Everything that is actually DPO work — the queue,
- * the facts panel, the status badge — is gone.
- */
-function ViewToggle({ tenantId, employeePreview }: { tenantId: string; employeePreview: boolean }) {
-  const base = "rounded px-3 py-1.5 text-sm border";
-  const on = "bg-slate-900 text-white border-slate-900";
-  const off = "bg-white text-slate-700 border-slate-300";
-  return (
-    <div className="flex items-center gap-2" role="group" aria-label="Preview">
-      <Link
-        href={`/tenants/${tenantId}`}
-        data-testid="view-dpo"
-        aria-current={!employeePreview ? "true" : undefined}
-        className={`${base} ${employeePreview ? off : on}`}
-      >
-        DPO view
-      </Link>
-      <Link
-        href={`/tenants/${tenantId}?view=employee`}
-        data-testid="view-employee"
-        aria-current={employeePreview ? "true" : undefined}
-        className={`${base} ${employeePreview ? on : off}`}
-      >
-        Employee view
-      </Link>
-    </div>
-  );
-}
-
-/**
- * What a tier-2 staff member's screen looks like — rendered from nothing.
- *
- * §4 tier 2 sees "whatever's been specifically published or assigned to them".
- * No publishing or assignment mechanism exists, so the honest preview is empty,
- * and it is empty because there is no query behind this component at all rather
- * than because something was fetched and filtered. There is nothing in the
- * response for a parameter to reveal.
- */
-function EmployeePreview() {
-  return (
-    <section className="py-10" data-testid="employee-preview">
-      <div className="rounded border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-        <strong>Preview only.</strong> This shows the shape of a staff member&rsquo;s screen in this
-        workspace. It is not a way to view anyone&rsquo;s actual scoped items, and it grants
-        nothing.
-      </div>
-
-      <div className="mt-6 rounded border border-slate-200 px-4 py-8 text-center">
-        <p className="text-slate-700">Nothing has been assigned to you.</p>
-        <p className="mx-auto mt-2 max-w-md text-sm text-slate-600">
-          A staff member sees only what has been published or assigned to them specifically — a
-          policy to acknowledge, a training module, one scoped question. Never the register, never a
-          DPIA, never another member&rsquo;s work.
-        </p>
-      </div>
-    </section>
   );
 }
 

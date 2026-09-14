@@ -100,7 +100,8 @@ Every draft — whether raised by a staff member's scoped answer or the accident
 - **Prompt A — batch intake** (fractional DPO onboarding a new client's existing document pile): two-stage pipeline — per-document candidate extraction with source/passage attribution, then cross-document reconciliation — reporting found-vs-not-evidenced against a canonical processing-activity checklist rather than assuming silence means absence. Designed in outline, not written in full.
 - **Prompt B — incremental reconciliation** (one new document against an existing register): enrich / propose new / flag drift, matched on purpose + vendor name, falling back to semantic similarity. Designed in outline, not written in full.
 - **Day-to-day elicitation prompt** (the new, sticky, high-frequency primitive — an accidental DPO reporting something like "we just signed up for a new vendor"): **fully drafted**, including system prompt and worked example. Key properties: conversational one-question-at-a-time, plain English with jargon explained inline, every field tagged `stated` / `inferred` / `unknown`, retrieval-based matching against the existing register happens before the model asks anything, DPIA-relevant risk signals are screened for quietly without exposing WP248 jargon to a non-specialist, output is a structured `pending_dpo_review` draft with tenant ID and source attribution. Flagged as needing tool-call/structured-output implementation rather than free-text parsing, given the confidence-tagging requirement.
-- **Not yet designed**: the vendor-facing DPIA questionnaire round-trip; the scoped single-question assignment prompt for tier-2 staff (distinct from the day-to-day elicitation prompt aimed at the accidental DPO); anything for Sentinel-style external case-law monitoring (explicitly parked — not a v1 priority for this target segment).
+- **Partly built after DPIA schema work**: the vendor-facing DPIA questionnaire round-trip now has its database foundation: vendor source documents, AI-extracted facts with confidence/evidence and citation coordinates, generated questionnaires/questions, returned answers, reconciliation drafts, approval gates, and AI usage accounting. The runtime prompts, extraction code, vendor-facing token/link flow and UI are not yet built.
+- **Not yet designed**: the scoped single-question assignment prompt for tier-2 staff (distinct from the day-to-day elicitation prompt aimed at the accidental DPO); anything for Sentinel-style external case-law monitoring (explicitly parked — not a v1 priority for this target segment).
 
 ---
 
@@ -112,7 +113,7 @@ Every draft — whether raised by a staff member's scoped answer or the accident
 4. How the credit/marketplace escalation idea integrates with the tenant model — parked.
 5. Tier-2 (staff) persistent identity mechanism — confirmed wanted, exact implementation (magic link vs. lightweight account) not finalized.
 6. Prompt B full text — not written.
-7. Vendor-facing DPIA questionnaire prompt — not designed.
+7. Vendor-facing DPIA questionnaire prompt — schema foundation built; prompt/runtime/link flow not designed.
 8. ~~Controlled vocabulary for data categories~~ — **resolved, see §9.**
 9. ~~Confidence-tag semantics~~ — **resolved, see §9.**
 10. ~~The seven-field ROPA schema itself~~ — **resolved, see §9.**

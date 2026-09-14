@@ -11,6 +11,7 @@
  */
 
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { useState } from "react";
 import { browserClient } from "@/lib/supabase-browser";
 import { LEGAL_BASES, LEGAL_BASIS_LABELS, type LegalBasis } from "@/lib/legal-basis";
@@ -58,84 +59,107 @@ export default function SignupPage() {
   }
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-sm flex-col justify-center gap-6 px-4">
-      <h1 className="text-2xl font-semibold">Create an account</h1>
+    <main className="min-h-screen bg-slate-50 px-4 py-10">
+      <section className="mx-auto grid min-h-[calc(100vh-5rem)] max-w-5xl items-center gap-8 md:grid-cols-[1fr_26rem]">
+        <div>
+          <Link href="/" className="text-sm text-slate-600 underline">
+            Fractional DPO
+          </Link>
+          <h1 className="mt-4 text-4xl font-semibold text-slate-950">Create the first workspace.</h1>
+          <p className="mt-3 max-w-xl text-base leading-7 text-slate-600">
+            The first account creates one company workspace and records why that company has a DPO.
+            That answer becomes part of the governance context, not a default hidden in code.
+          </p>
+        </div>
 
-      <form onSubmit={onSubmit} className="flex flex-col gap-4">
-        <label className="flex flex-col gap-1 text-sm">
-          Email
-          <input
-            id="email"
-            name="email"
-            type="email"
-            required
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            className="rounded border border-slate-300 px-3 py-2"
-          />
-        </label>
+        <div className="rounded border border-slate-200 bg-white p-5 shadow-sm">
+          <h2 className="text-xl font-semibold">Create an account</h2>
 
-        <label className="flex flex-col gap-1 text-sm">
-          Password
-          <input
-            id="password"
-            name="password"
-            type="password"
-            required
-            minLength={8}
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            className="rounded border border-slate-300 px-3 py-2"
-          />
-        </label>
-
-        <label className="flex flex-col gap-1 text-sm">
-          Company name
-          <input
-            id="tenantName"
-            name="tenantName"
-            type="text"
-            required
-            value={tenantName}
-            onChange={(e) => setTenantName(e.target.value)}
-            className="rounded border border-slate-300 px-3 py-2"
-          />
-        </label>
-
-        <fieldset className="flex flex-col gap-2 text-sm">
-          {/* Required, with no preselected option. A default here would record
-              a legal position the company never stated — see §6. */}
-          <legend className="mb-1">Why does this company have a DPO?</legend>
-          {LEGAL_BASES.map((basis) => (
-            <label key={basis} className="flex items-start gap-2">
+          <form onSubmit={onSubmit} className="mt-5 flex flex-col gap-4">
+            <label className="flex flex-col gap-1 text-sm">
+              Email
               <input
-                type="radio"
-                name="legalBasis"
-                value={basis}
+                id="email"
+                name="email"
+                type="email"
                 required
-                checked={legalBasis === basis}
-                onChange={() => setLegalBasis(basis)}
-                className="mt-1"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="rounded border border-slate-300 px-3 py-2"
               />
-              <span>{LEGAL_BASIS_LABELS[basis]}</span>
             </label>
-          ))}
-        </fieldset>
 
-        <button
-          type="submit"
-          disabled={busy}
-          className="rounded bg-slate-900 px-3 py-2 text-white disabled:opacity-50"
-        >
-          {busy ? "Creating…" : "Create account"}
-        </button>
-      </form>
+            <label className="flex flex-col gap-1 text-sm">
+              Password
+              <input
+                id="password"
+                name="password"
+                type="password"
+                required
+                minLength={8}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="rounded border border-slate-300 px-3 py-2"
+              />
+            </label>
 
-      {error ? (
-        <p role="alert" className="text-sm text-red-700">
-          {error}
-        </p>
-      ) : null}
+            <label className="flex flex-col gap-1 text-sm">
+              Company name
+              <input
+                id="tenantName"
+                name="tenantName"
+                type="text"
+                required
+                value={tenantName}
+                onChange={(e) => setTenantName(e.target.value)}
+                className="rounded border border-slate-300 px-3 py-2"
+              />
+            </label>
+
+            <fieldset className="flex flex-col gap-2 text-sm">
+              {/* Required, with no preselected option. A default here would record
+                  a legal position the company never stated — see §6. */}
+              <legend className="mb-1">Why does this company have a DPO?</legend>
+              {LEGAL_BASES.map((basis) => (
+                <label key={basis} className="flex items-start gap-2">
+                  <input
+                    type="radio"
+                    name="legalBasis"
+                    value={basis}
+                    required
+                    checked={legalBasis === basis}
+                    onChange={() => setLegalBasis(basis)}
+                    className="mt-1"
+                  />
+                  <span>{LEGAL_BASIS_LABELS[basis]}</span>
+                </label>
+              ))}
+            </fieldset>
+
+            <button
+              type="submit"
+              disabled={busy}
+              className="rounded bg-slate-900 px-3 py-2 text-white disabled:opacity-50"
+            >
+              {busy ? "Creating…" : "Create account"}
+            </button>
+          </form>
+
+          {error ? (
+            <p role="alert" className="mt-4 text-sm text-red-700">
+              {error}
+            </p>
+          ) : null}
+
+          <p className="mt-5 text-sm text-slate-600">
+            Already have an account?{" "}
+            <Link href="/login" className="underline">
+              Sign in
+            </Link>
+            .
+          </p>
+        </div>
+      </section>
     </main>
   );
 }
