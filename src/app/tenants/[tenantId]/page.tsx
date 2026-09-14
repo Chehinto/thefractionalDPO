@@ -191,6 +191,13 @@ export default async function TenantPage({
               Request vendor
             </Link>
             <Link
+              href={`/tenants/${tenant.id}/settings`}
+              className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+              data-testid="open-settings"
+            >
+              Settings
+            </Link>
+            <Link
               href={`/tenants/${tenant.id}/roster`}
               className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
               data-testid="open-roster"

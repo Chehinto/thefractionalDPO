@@ -14,10 +14,13 @@ round-trip and an auditor's read of the approved register, and the tier-2
 assignment primitive — one thing pushed to one member, with the response
 logged.
 
-**Not built:** incidents, rights requests, and training content. Nothing sends
-email — a DPO copies a link and sends it themselves — so `tenants`
-`platform_send_authorized` exists, defaults to false, and is the flag a future
-sending path must check before acting on a DPO's behalf.
+**Not built:** incidents, rights requests, and training content.
+
+Email sends through Resend when `RESEND_API_KEY` is set, and is otherwise
+recorded as skipped rather than failing anything. A questionnaire is only
+emailed when the workspace has set `platform_send_authorized` — off by default,
+because it authorises us to act in the DPO's name. A DPO can always copy the
+link and send it themselves instead.
 
 New features should land only after their access rules are expressed in RLS and
 tested.

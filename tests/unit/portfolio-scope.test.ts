@@ -157,6 +157,14 @@ describe("the data the dashboard reads per workspace", () => {
     // portfolio dashboard reads DPO-scoped data only after `requireSession`,
     // then renders tenant-level summaries instead of source-level details.
     //
+    // `email_log` (0018) carries the one thing on this list that is personal
+    // data about someone who is not a user of the product: a vendor's address,
+    // and a subject line naming their company. It is exposed because a DPO has
+    // to be able to read back what was sent under their name — that is the
+    // price of sending on someone's behalf — and it is readable only by that
+    // tenant's Active DPO. Nothing on the portfolio reads it, and the address
+    // deliberately never reaches the platform log.
+    //
     // `assignment` (0016) is the one table here scoped to a PERSON rather than
     // only to a tenant, so it got the full exercise: its read policy is
     // `assignee_id = me OR I am the Active DPO here`, and the portfolio does
@@ -187,6 +195,7 @@ describe("the data the dashboard reads per workspace", () => {
       "ai_suggestion",
       "assignment",
       "dpia",
+      "email_log",
       "generated_document_draft",
       "generated_document_section",
       "memberships",

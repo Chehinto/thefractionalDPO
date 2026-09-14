@@ -26,6 +26,7 @@ interface Issued {
   url: string;
   label: string;
   expiresAt: string;
+  delivery: { attempted: boolean; outcome: string | null; reason: string | null } | null;
 }
 
 export function IssueLinkForm({
@@ -60,12 +61,18 @@ export function IssueLinkForm({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           label: form.get("label"),
+          vendorContactEmail: form.get("vendorContactEmail"),
           purpose,
           questionnaireId: form.get("questionnaireId"),
           days: Number(form.get("days")),
         }),
       });
-      const body = (await response.json()) as { url?: string; expiresAt?: string; error?: string };
+      const body = (await response.json()) as {
+        url?: string;
+        expiresAt?: string;
+        error?: string;
+        delivery?: Issued["delivery"];
+      };
 
       if (!response.ok || !body.url) {
         setError(body.error ?? "The link could not be issued");
@@ -75,6 +82,7 @@ export function IssueLinkForm({
         url: body.url,
         label: String(form.get("label") ?? ""),
         expiresAt: body.expiresAt ?? "",
+        delivery: body.delivery ?? null,
       });
     } catch {
       setError("The link could not be issued");
@@ -154,6 +162,29 @@ export function IssueLinkForm({
           </p>
         </div>
 
+        {purpose === "vendor_questionnaire" ? (
+          <div>
+            <label
+              htmlFor="vendorContactEmail"
+              className="block text-sm font-medium text-slate-800"
+            >
+              Vendor email (optional)
+            </label>
+            <input
+              id="vendorContactEmail"
+              name="vendorContactEmail"
+              type="email"
+              placeholder="security@acme.com"
+              className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm"
+              data-testid="vendor-contact-email"
+            />
+            <p className="mt-1 text-xs text-slate-500">
+              Leave blank to copy the link and send it yourself. Filling it in only sends if this
+              workspace has authorised us to send on your behalf.
+            </p>
+          </div>
+        ) : null}
+
         <div>
           <label htmlFor="days" className="block text-sm font-medium text-slate-800">
             Expires after
@@ -203,6 +234,17 @@ export function IssueLinkForm({
           <p className="mt-1 text-xs text-emerald-800">
             Send it to {issued.label} yourself. Revoke it below at any time.
           </p>
+          {issued.delivery?.attempted ? (
+            <p className="mt-2 text-xs text-emerald-800" data-testid="issued-link-sent">
+              {issued.delivery.outcome === "sent"
+                ? "Emailed to the vendor on your behalf."
+                : `Not delivered (${issued.delivery.outcome}). Send the link yourself.`}
+            </p>
+          ) : issued.delivery?.reason ? (
+            <p className="mt-2 text-xs text-amber-900" data-testid="issued-link-not-sent">
+              {issued.delivery.reason}
+            </p>
+          ) : null}
           <code
             className="mt-2 block break-all rounded border border-emerald-200 bg-white px-2 py-1.5 text-xs"
             data-testid="issued-link-url"

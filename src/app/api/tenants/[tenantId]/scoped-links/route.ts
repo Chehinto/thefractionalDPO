@@ -18,6 +18,11 @@ import {
 } from "@/lib/scoped-access";
 import { errorResponse, requireMembership, TenantAccessError } from "@/lib/tenant-access";
 import { requestClient } from "@/lib/supabase-server";
+import { sendEmail } from "@/lib/send-email";
+import {
+  vendorQuestionnaireBody,
+  vendorQuestionnaireSubject,
+} from "@/lib/vendor-questionnaire-email";
 
 export const dynamic = "force-dynamic";
 
@@ -41,6 +46,8 @@ export async function POST(
     const purpose = body.purpose === "auditor_review" ? "auditor_review" : "vendor_questionnaire";
     const questionnaireId = typeof body.questionnaireId === "string" ? body.questionnaireId : "";
     const days = Number(body.days);
+    const vendorContactEmail =
+      typeof body.vendorContactEmail === "string" ? body.vendorContactEmail.trim() : "";
 
     if (!label) {
       return NextResponse.json({ error: "Say who this link is for" }, { status: 400 });
@@ -78,13 +85,28 @@ export async function POST(
     }
 
     const grant = data as { id: string; expires_at: string };
+    const url = new URL(`/s/${token}`, request.url).toString();
+    const delivery = await maybeSend({
+      supabase,
+      tenantId,
+      grant,
+      url,
+      purpose,
+      questionnaireId,
+      vendorContactEmail,
+      session: access.session,
+    });
+
     return NextResponse.json(
       {
         // Returned once and never recoverable. Nothing stores the plaintext.
-        url: new URL(`/s/${token}`, request.url).toString(),
+        // Still returned even when the message was sent, because "sent" is not
+        // "arrived" — a DPO who gets a bounce needs the link in their hand.
+        url,
         grantId: grant.id,
         expiresAt: grant.expires_at,
         label,
+        delivery,
       },
       { status: 201 }
     );
@@ -108,4 +130,91 @@ function messageFor(message: string): string {
   }
   if (message.includes("read-only")) return "This workspace cannot be written to";
   return "The link could not be issued";
+}
+
+/**
+ * Send the link, if this workspace has authorized us to and an address was
+ * given. Returns what happened, so the DPO is told rather than left guessing.
+ *
+ * `platform_send_authorized` is read here, at the point the decision is made,
+ * rather than inside the mailer. A mailer that enforced it would be a mailer a
+ * future caller could route around by not using it; a caller that has to ask
+ * the question cannot forget the question exists.
+ */
+async function maybeSend({
+  supabase,
+  tenantId,
+  grant,
+  url,
+  purpose,
+  questionnaireId,
+  vendorContactEmail,
+  session,
+}: {
+  supabase: Awaited<ReturnType<typeof requestClient>>;
+  tenantId: string;
+  grant: { id: string; expires_at: string };
+  url: string;
+  purpose: string;
+  questionnaireId: string;
+  vendorContactEmail: string;
+  session: { personId: string; email: string };
+}): Promise<{ attempted: boolean; outcome: string | null; reason: string | null }> {
+  if (!vendorContactEmail) {
+    return { attempted: false, outcome: null, reason: null };
+  }
+  if (purpose !== "vendor_questionnaire") {
+    return { attempted: false, outcome: null, reason: "Only questionnaire links are sent by email" };
+  }
+
+  const { data: tenant } = await supabase
+    .from("tenants")
+    .select("name, platform_send_authorized, vendor_recommendation_note")
+    .eq("id", tenantId)
+    .single();
+
+  if (!tenant?.platform_send_authorized) {
+    return {
+      attempted: false,
+      outcome: null,
+      reason:
+        "This workspace has not authorized us to send on your behalf. Turn that on in Settings, or copy the link and send it yourself.",
+    };
+  }
+
+  const [{ data: questionnaire }, { count }, { data: person }] = await Promise.all([
+    supabase.from("vendor_questionnaire").select("vendor_name").eq("id", questionnaireId).single(),
+    supabase
+      .from("vendor_questionnaire_question")
+      .select("id", { count: "exact", head: true })
+      .eq("questionnaire_id", questionnaireId),
+    supabase.from("people").select("full_name, email").eq("id", session.personId).single(),
+  ]);
+
+  const input = {
+    vendorContactEmail,
+    vendorName: (questionnaire?.vendor_name as string) ?? "your company",
+    tenantName: (tenant.name as string) ?? "a client",
+    dpoName: (person?.full_name as string) || (person?.email as string) || session.email,
+    linkUrl: url,
+    expiresAt: grant.expires_at,
+    questionCount: count ?? 0,
+    includeRecommendation: Boolean(tenant.vendor_recommendation_note),
+  };
+
+  const result = await sendEmail({
+    to: vendorContactEmail,
+    subject: vendorQuestionnaireSubject(input),
+    html: vendorQuestionnaireBody(input),
+    templateKey: "vendor_questionnaire_invite",
+    tenantId,
+    // One send per grant. A double-submitted form issues a second grant with
+    // its own key, so this does not block a deliberate re-send; it blocks the
+    // same link going out twice.
+    idempotencyKey: `vendor_questionnaire_invite:${grant.id}`,
+    scopedAccessGrantId: grant.id,
+    createdBy: session.personId,
+  });
+
+  return { attempted: true, outcome: result.outcome, reason: null };
 }
