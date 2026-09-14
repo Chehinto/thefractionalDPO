@@ -309,6 +309,15 @@ describe("concurrency", () => {
   it("does not race a new signup into two workspaces", async () => {
     // A double-submitted signup form, or a retried fetch. Both requests arrive
     // with the same session and neither sees a workspace yet.
+    //
+    // This is a real-world smoke test through PostgREST, NOT the guard for the
+    // overlap bug 0014 fixed. Measured against the broken function it only
+    // reproduced about one run in six, and raising the concurrency made it
+    // worse rather than better — at ten or more simultaneous calls the pool
+    // queues them, the transactions stop overlapping, and it never reproduced
+    // at all. `signup-race.test.ts` drives that interleaving directly and fails
+    // every time when the bug is present; this one just checks the ordinary
+    // path over the wire.
     const frank = await createActor("tc-frank");
 
     const call = () =>
@@ -318,13 +327,15 @@ describe("concurrency", () => {
         p_legal_basis: "voluntary",
       });
 
-    const [first, second] = await Promise.all([call(), call()]);
+    const results = await Promise.all([call(), call()]);
 
-    expect(first.error).toBeNull();
-    expect(second.error).toBeNull();
+    for (const result of results) {
+      expect(result.error).toBeNull();
+    }
 
     // Both calls return, and both return the SAME workspace.
-    expect((first.data as { id: string }).id).toBe((second.data as { id: string }).id);
+    const ids = new Set(results.map((r) => (r.data as { id: string }).id));
+    expect([...ids]).toHaveLength(1);
 
     const { data: memberships } = await adminClient()
       .from("memberships")
@@ -332,6 +343,13 @@ describe("concurrency", () => {
       .eq("person_id", frank.personId);
     expect(memberships).toHaveLength(1);
   });
+
+  // `app.is_live_at` is deliberately not probed directly. Reaching it from a
+  // test would mean exposing an `app.*` predicate through PostgREST, and this
+  // is the function every RLS policy in the product descends from — the last
+  // one that should gain public surface for a test's convenience. The refactor
+  // is covered anyway: `app.is_live` now delegates to it, so a break in the
+  // delegation fails the whole RLS suite rather than one assertion.
 
   it("does not race a new signup into two person rows", async () => {
     // Two auth accounts cannot share an address, so the race this guards is the
