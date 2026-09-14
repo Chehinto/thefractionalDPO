@@ -37,12 +37,7 @@ export async function saveAiSuggestion({
   // saw a 500, retried, and produced a second suggestion for one piece of work.
   // Recording first fails closed — nothing has been written yet — and still
   // refuses to let AI work happen with no cost and attribution trail.
-  const callId = await recordAiCall({
-    tenantId,
-    model: draft.model,
-    inputTokens: draft.inputTokens,
-    outputTokens: draft.outputTokens,
-  });
+  const callIds = await recordAiCalls(tenantId, draft);
 
   const { data, error } = await supabase
     .from("ai_suggestion")
@@ -70,7 +65,7 @@ export async function saveAiSuggestion({
     .select("id, status")
     .single();
 
-  await linkAiCall(callId, (data?.id as string | undefined) ?? null, !error);
+  await linkAiCalls(callIds, (data?.id as string | undefined) ?? null);
 
   return {
     data: data ? { id: data.id as string, status: data.status as string } : null,
@@ -78,58 +73,64 @@ export async function saveAiSuggestion({
   };
 }
 
-async function recordAiCall({
-  tenantId,
-  model,
-  inputTokens,
-  outputTokens,
-}: {
-  tenantId: string;
-  model: string;
-  inputTokens: number;
-  outputTokens: number;
-}): Promise<string> {
+/**
+ * Record every provider call the draft cost — one row per attempt.
+ *
+ * An escalation recorded only as its successful retry hides the wasted cheap
+ * call, and how often the fast tier fails is the only real evidence for whether
+ * `AI_TASK_TIERS` is set right. `billed_to` is 'platform' because this product
+ * has no plan where the customer brings their own key; if one is added, that is
+ * the column that has to change.
+ */
+async function recordAiCalls(tenantId: string, draft: AiSuggestionDraft): Promise<string[]> {
   const { data, error } = await serviceClient()
     .from("ai_call")
-    .insert({
-      tenant_id: tenantId,
-      task: "ai_suggestion_generation",
-      model,
-      tier: model.includes("fallback") ? "fast" : "capable",
-      input_tokens: inputTokens,
-      output_tokens: outputTokens,
-      // The draft already exists by the time this runs, so generation itself
-      // succeeded. `linkAiCall` flips this if the suggestion fails to persist.
-      ok: true,
-      billed_to: "platform",
-    })
-    .select("id")
-    .single();
+    .insert(
+      draft.attempts.map((attempt) => ({
+        tenant_id: tenantId,
+        task: "ai_suggestion_generation",
+        model: attempt.model,
+        tier: attempt.tier,
+        input_tokens: attempt.inputTokens,
+        output_tokens: attempt.outputTokens,
+        escalated: draft.escalated,
+        ok: attempt.ok,
+        billed_to: "platform",
+      }))
+    )
+    .select("id");
 
-  // Still fatal, but now fatal before anything else is written: no suggestion
+  // Still fatal, but fatal before anything else is written: no suggestion
   // exists yet, so the caller's retry starts from a clean state.
   if (error) {
     throw new Error(`Could not record AI usage: ${error.message}`);
   }
 
-  return data!.id as string;
+  return (data ?? []).map((row) => row.id as string);
 }
 
 /**
- * Attach the saved suggestion to its usage row and record whether it persisted.
+ * Attach the saved suggestion to its usage rows.
  *
- * Deliberately does not throw. The cost and attribution row already exists; only
- * its link to the suggestion is missing. Throwing here would reintroduce exactly
- * the duplicate-on-retry failure the write ordering above exists to prevent.
+ * Takes no success flag: a failed suggestion insert does not retroactively make
+ * the provider calls fail — they produced a valid draft, and each attempt's own
+ * `ok` describes the model's behaviour. A null `suggestionId` is itself the
+ * record that the draft never reached the review queue.
+ *
+ * Deliberately does not throw. The cost and attribution rows already exist; only
+ * their link to the suggestion is missing. Throwing here would reintroduce
+ * exactly the duplicate-on-retry failure the write ordering above prevents.
  */
-async function linkAiCall(callId: string, suggestionId: string | null, ok: boolean) {
+async function linkAiCalls(callIds: string[], suggestionId: string | null) {
+  if (callIds.length === 0) return;
+
   const { error } = await serviceClient()
     .from("ai_call")
-    .update({ ai_suggestion_id: suggestionId, ok })
-    .eq("id", callId);
+    .update({ ai_suggestion_id: suggestionId })
+    .in("id", callIds);
 
   if (error) {
-    console.error(`Could not link AI usage ${callId} to its suggestion: ${error.message}`);
+    console.error(`Could not link AI usage ${callIds.join(", ")} to its suggestion: ${error.message}`);
   }
 }
 

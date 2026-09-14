@@ -1,5 +1,14 @@
 import "server-only";
 
+import {
+  type AiProvider,
+  type AiTask,
+  type AiTier,
+  modelFor,
+  supportsEffort,
+  tierFor,
+} from "./ai-models";
+
 export type Confidence = "stated" | "inferred" | "unknown";
 
 export const AI_SUGGESTION_KINDS = [
@@ -34,6 +43,21 @@ export interface AiSuggestionRequest {
   generatedDocumentDraftId: string | null;
 }
 
+/**
+ * One provider call. Kept individually rather than summed because an escalation
+ * that is only recorded as its successful retry hides what the cheap attempt
+ * cost — and how often the fast tier fails is the only real evidence for
+ * whether `AI_TASK_TIERS` is set right.
+ */
+export interface AiAttempt {
+  model: string;
+  tier: AiTier;
+  inputTokens: number;
+  outputTokens: number;
+  ok: boolean;
+  reason?: string;
+}
+
 export interface AiSuggestionDraft {
   title: string;
   responseText: string;
@@ -42,9 +66,13 @@ export interface AiSuggestionDraft {
   confidence: Confidence;
   confidenceScore: number;
   model: string;
+  tier: AiTier;
   promptKey: string;
+  /** Summed across attempts, so an escalated draft reports what it truly cost. */
   inputTokens: number;
   outputTokens: number;
+  escalated: boolean;
+  attempts: AiAttempt[];
   usedFallback: boolean;
 }
 
@@ -69,6 +97,21 @@ const PROMPT_KEY = "ai_suggestion_review_v1";
  * stalls a whole import rather than a single request.
  */
 const AI_REQUEST_TIMEOUT_MS = 30_000;
+
+const TASK: AiTask = "ai_suggestion_generation";
+const MAX_OUTPUT_TOKENS = 4_000;
+
+/**
+ * The response shape, stated in the prompt rather than enforced by the API.
+ * Anthropic's Messages API has no strict JSON-schema mode, so the guarantee
+ * comes from `validateAiSuggestionOutput` instead — which is where it belonged
+ * anyway: the schema could constrain the shape of `sourceExcerpt` but never
+ * whether the excerpt actually appears in the source.
+ */
+const OUTPUT_CONTRACT =
+  'Reply with only a JSON object, no prose and no code fence, with exactly these keys: ' +
+  '"title" (string), "responseText" (string), "sourceExcerpt" (string copied verbatim from the source text), ' +
+  '"confidence" (one of "stated", "inferred", "unknown"), and "confidenceScore" (integer 1-100).';
 
 export function parseAiSuggestionRequest(raw: unknown): AiSuggestionRequest {
   const body = isRecord(raw) ? raw : {};
@@ -105,23 +148,99 @@ export function parseAiSuggestionRequest(raw: unknown): AiSuggestionRequest {
   };
 }
 
+/**
+ * Draft one suggestion, on the platform's own key.
+ *
+ * This is the pay-as-you-go path and the only one: unlike AxioVendo, this
+ * product has no plan where a customer brings their own provider, so there is
+ * no browser-side caller and no second key to resolve. The tier/escalation
+ * shape is AxioVendo's, because the reason for it carries over — a fast-tier
+ * result that fails validation is worth one retry on the capable model, and
+ * both attempts are worth recording.
+ */
 export async function generateAiSuggestionDraft(
   request: AiSuggestionRequest
 ): Promise<AiSuggestionDraft> {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) return localSuggestionDraft(request);
+  const apiKey = process.env.DPO_AI_KEY || process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return unconfiguredDraft(request);
 
-  const model = process.env.OPENAI_AI_SUGGESTION_MODEL || "gpt-5-mini";
-  const payload = buildOpenAiSuggestionPayload(request, model);
+  const provider = (process.env.DPO_AI_PROVIDER || "anthropic") as AiProvider;
+  const baseTier = tierFor(TASK);
+  const attempts: AiAttempt[] = [];
+
+  // Kept so that a failure on every tier reports the provider's actual problem
+  // — a timeout stays a 504 rather than being flattened into a generic 502.
+  let lastError: unknown = null;
+
+  const attempt = async (tier: AiTier) => {
+    const model = modelFor(provider, tier);
+    try {
+      const { parsed, usage, truncated } = await callProvider(request, provider, model, apiKey);
+      // A reply cut off at the token ceiling is incomplete JSON by definition;
+      // repairing the string cannot recover what was never sent.
+      if (truncated) throw new AiRuntimeError(502, "The AI provider's reply was cut off");
+      const draft = validateAiSuggestionOutput(request, parsed);
+      attempts.push({ model, tier, ...usage, ok: true });
+      return { draft, model, tier };
+    } catch (e) {
+      lastError = e;
+      const reason = e instanceof Error ? e.message : String(e);
+      attempts.push({ model, tier, inputTokens: 0, outputTokens: 0, ok: false, reason });
+      return null;
+    }
+  };
+
+  let accepted = await attempt(baseTier);
+
+  // Only the cheap tier escalates. A capable-tier failure is a real failure;
+  // retrying the same model on the same input would just spend twice.
+  const escalated = accepted === null && baseTier === "fast";
+  if (escalated) accepted = await attempt("capable");
+
+  if (!accepted) {
+    if (lastError instanceof AiRuntimeError) throw lastError;
+    throw new AiRuntimeError(502, "The AI provider could not generate a suggestion");
+  }
+
+  return {
+    ...accepted.draft,
+    model: accepted.model,
+    tier: accepted.tier,
+    promptKey: PROMPT_KEY,
+    inputTokens: attempts.reduce((total, a) => total + a.inputTokens, 0),
+    outputTokens: attempts.reduce((total, a) => total + a.outputTokens, 0),
+    escalated,
+    attempts,
+    usedFallback: false,
+  };
+}
+
+async function callProvider(
+  request: AiSuggestionRequest,
+  provider: AiProvider,
+  model: string,
+  apiKey: string
+): Promise<{
+  parsed: unknown;
+  usage: { inputTokens: number; outputTokens: number };
+  truncated: boolean;
+}> {
+  if (provider !== "anthropic") {
+    throw new AiRuntimeError(500, `Unsupported AI provider: ${provider}`);
+  }
+
   let response: Response;
   try {
-    response = await fetch("https://api.openai.com/v1/responses", {
+    response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
-        authorization: `Bearer ${apiKey}`,
         "content-type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+        // No browser-access header: this module is `server-only`, so the key
+        // never leaves the server and the call is never made from a page.
       },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(buildAnthropicSuggestionPayload(request, model)),
       signal: AbortSignal.timeout(AI_REQUEST_TIMEOUT_MS),
     });
   } catch (e) {
@@ -139,96 +258,67 @@ export async function generateAiSuggestionDraft(
     throw new AiRuntimeError(502, "The AI provider could not generate a suggestion");
   }
 
-  const parsed = parseOpenAiSuggestionJson(json);
-  const usage = responseUsage(json);
   return {
-    ...validateAiSuggestionOutput(request, parsed),
-    model,
-    promptKey: PROMPT_KEY,
-    inputTokens: usage.inputTokens,
-    outputTokens: usage.outputTokens,
-    usedFallback: false,
+    parsed: parseAnthropicSuggestionJson(json),
+    usage: responseUsage(json),
+    truncated: isRecord(json) && json.stop_reason === "max_tokens",
   };
 }
 
-export function buildOpenAiSuggestionPayload(request: AiSuggestionRequest, model: string) {
+export function buildAnthropicSuggestionPayload(request: AiSuggestionRequest, model: string) {
   return {
     model,
-    input: [
-      {
-        role: "system",
-        content: [
-          {
-            type: "input_text",
-            text:
-              "You draft GDPR compliance review suggestions for a DPO. " +
-              "Return only the requested JSON. Never invent a source excerpt: sourceExcerpt must be copied exactly from the source text.",
-          },
-        ],
-      },
+    max_tokens: MAX_OUTPUT_TOKENS,
+    // Structured extraction, not open-ended reasoning: low effort keeps latency
+    // and spend down without hurting quality. Sent only where the model accepts
+    // it — Haiku rejects the parameter outright.
+    ...(supportsEffort(model) ? { output_config: { effort: "low" } } : {}),
+    system:
+      "You draft GDPR compliance review suggestions for a DPO. " +
+      "Never invent a source excerpt: sourceExcerpt must be copied exactly from the source text. " +
+      OUTPUT_CONTRACT,
+    messages: [
       {
         role: "user",
         content: [
-          {
-            type: "input_text",
-            text: [
-              `Suggestion kind: ${request.kind}`,
-              request.titleHint ? `Title hint: ${request.titleHint}` : null,
-              request.instruction ? `Instruction: ${request.instruction}` : null,
-              request.sourceLabel ? `Source label: ${request.sourceLabel}` : null,
-              "Source text:",
-              request.sourceText,
-            ]
-              .filter(Boolean)
-              .join("\n\n"),
-          },
-        ],
+          `Suggestion kind: ${request.kind}`,
+          request.titleHint ? `Title hint: ${request.titleHint}` : null,
+          request.instruction ? `Instruction: ${request.instruction}` : null,
+          request.sourceLabel ? `Source label: ${request.sourceLabel}` : null,
+          "Source text:",
+          request.sourceText,
+        ]
+          .filter(Boolean)
+          .join("\n\n"),
       },
     ],
-    text: {
-      format: {
-        type: "json_schema",
-        name: "fractional_dpo_ai_suggestion",
-        strict: true,
-        schema: {
-          type: "object",
-          additionalProperties: false,
-          required: ["title", "responseText", "sourceExcerpt", "confidence", "confidenceScore"],
-          properties: {
-            title: { type: "string", minLength: 1 },
-            responseText: { type: "string", minLength: 1 },
-            sourceExcerpt: { type: "string", minLength: 1 },
-            confidence: { type: "string", enum: ["stated", "inferred", "unknown"] },
-            confidenceScore: { type: "integer", minimum: 1, maximum: 100 },
-          },
-        },
-      },
-    },
   };
 }
 
-export function parseOpenAiSuggestionJson(raw: unknown): unknown {
-  const outputText = isRecord(raw) && typeof raw.output_text === "string" ? raw.output_text : null;
-  if (outputText) return parseJson(outputText);
-
-  if (isRecord(raw) && Array.isArray(raw.output)) {
-    for (const item of raw.output) {
-      if (!isRecord(item) || !Array.isArray(item.content)) continue;
-      for (const content of item.content) {
-        if (isRecord(content) && typeof content.text === "string") {
-          return parseJson(content.text);
-        }
-      }
-    }
+export function parseAnthropicSuggestionJson(raw: unknown): unknown {
+  if (!isRecord(raw) || !Array.isArray(raw.content)) {
+    throw new AiRuntimeError(502, "The AI provider returned no structured suggestion");
   }
 
-  throw new AiRuntimeError(502, "The AI provider returned no structured suggestion");
+  const text = raw.content
+    .map((block) => (isRecord(block) && typeof block.text === "string" ? block.text : ""))
+    .join("")
+    .trim();
+
+  if (!text) throw new AiRuntimeError(502, "The AI provider returned no structured suggestion");
+  return parseJson(text);
 }
+
+/** The parts of a draft that come from the model, before call metadata is attached. */
+export type ValidatedAiSuggestion = Pick<
+  AiSuggestionDraft,
+  "title" | "responseText" | "sourceExcerpt" | "sourceLabel" | "confidence" | "confidenceScore"
+>;
 
 export function validateAiSuggestionOutput(
   request: AiSuggestionRequest,
   raw: unknown
-): Omit<AiSuggestionDraft, "model" | "promptKey" | "inputTokens" | "outputTokens" | "usedFallback"> {
+): ValidatedAiSuggestion {
   if (!isRecord(raw)) throw new AiRuntimeError(502, "The AI provider returned invalid JSON");
 
   const title = textField(raw.title);
@@ -263,12 +353,32 @@ export function validateAiSuggestionOutput(
   };
 }
 
-function localSuggestionDraft(request: AiSuggestionRequest): AiSuggestionDraft {
+/**
+ * What happens with no key configured.
+ *
+ * In production this refuses, the way AxioVendo's PAYG route does: a workspace
+ * silently filling its review queue with placeholder text that no model wrote
+ * is worse than an error, because the placeholders are indistinguishable from
+ * real drafts once a DPO is working through the queue.
+ *
+ * Outside production it returns a clearly-labelled local draft instead, so that
+ * the intake and review flows can be developed and end-to-end tested without a
+ * key and without spend. The draft still goes through the same validation, so
+ * the fallback cannot produce something the real path would reject.
+ */
+function unconfiguredDraft(request: AiSuggestionRequest): AiSuggestionDraft {
+  if (process.env.NODE_ENV === "production") {
+    throw new AiRuntimeError(503, "AI is not configured on this deployment (set DPO_AI_KEY)");
+  }
+
   const excerpt = firstUsefulExcerpt(request.sourceText);
   const title = request.titleHint || titleForKind(request.kind);
   const responseText =
     `${title}: review the cited source before applying this suggestion. ` +
-    "The runtime used the local fallback because no OpenAI API key is configured.";
+    "The runtime used the local fallback because no AI provider key is configured.";
+  const inputTokens = estimateTokens(request.sourceText);
+  const outputTokens = estimateTokens(responseText);
+  const model = "local-ai-suggestion-fallback";
 
   return {
     ...validateAiSuggestionOutput(request, {
@@ -278,10 +388,13 @@ function localSuggestionDraft(request: AiSuggestionRequest): AiSuggestionDraft {
       confidence: "inferred",
       confidenceScore: 55,
     }),
-    model: "local-ai-suggestion-fallback",
+    model,
+    tier: "fast",
     promptKey: PROMPT_KEY,
-    inputTokens: estimateTokens(request.sourceText),
-    outputTokens: estimateTokens(responseText),
+    inputTokens,
+    outputTokens,
+    escalated: false,
+    attempts: [{ model, tier: "fast", inputTokens, outputTokens, ok: true }],
     usedFallback: true,
   };
 }
@@ -311,9 +424,15 @@ function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
+/**
+ * Strip a code fence before parsing. Without a schema-enforcing API the model
+ * sometimes wraps the object despite being told not to, and a fenced reply is
+ * correct output in the wrong envelope — not a reason to spend a retry.
+ */
 function parseJson(text: string): unknown {
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)(?:```|$)/);
   try {
-    return JSON.parse(text);
+    return JSON.parse((fenced ? fenced[1]! : text).trim());
   } catch {
     throw new AiRuntimeError(502, "The AI provider returned malformed JSON");
   }
