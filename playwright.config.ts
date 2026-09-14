@@ -25,6 +25,14 @@ export default defineConfig({
    * on every run; worth revisiting when this runs in CI.
    */
   expect: { timeout: 15_000 },
+  /**
+   * Playwright's 30s default is a per-TEST budget, and the multi-person
+   * journeys here spend most of it before asserting anything: a tier-2 test
+   * creates two actors, signs in twice in two browser contexts, and walks six
+   * routes that a dev server compiles on first request. The assertions are
+   * individually fast; the setup is not.
+   */
+  timeout: 90_000,
   use: {
     baseURL: "http://127.0.0.1:3000",
     trace: "retain-on-failure",

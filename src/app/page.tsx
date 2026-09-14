@@ -21,7 +21,7 @@
  */
 
 import Link from "next/link";
-import { requireSession, TenantAccessError } from "@/lib/tenant-access";
+import { type Membership, requireSession, TenantAccessError } from "@/lib/tenant-access";
 import { requestClient } from "@/lib/supabase-server";
 import { LEGAL_BASIS_LABELS } from "@/lib/legal-basis";
 import {
@@ -270,7 +270,43 @@ export default async function PortfolioPage() {
           ))}
         </>
       )}
+
+      <TasksElsewhere memberships={session.memberships} />
     </main>
+  );
+}
+
+/**
+ * A door, not a listing.
+ *
+ * §4 makes the portfolio exactly the Active DPO list, and this page says so in
+ * its own copy: a staff membership "is not a portfolio entry and never appears
+ * here". An earlier version of this listed those workspaces by name and broke
+ * the regression test that pins that rule — correctly, because showing a
+ * workspace someone does not run alongside the ones they do misrepresents what
+ * they are responsible for, however carefully it is labelled.
+ *
+ * So this names nothing: a count and a link. That is enough for the problem it
+ * exists for — before it, a staff member signed in to an empty screen with no
+ * route to the one workspace that had asked them for something. The names live
+ * on /tasks, which is not a portfolio and does not pretend to be.
+ */
+function TasksElsewhere({ memberships }: { memberships: Membership[] }) {
+  const elsewhere = memberships.filter((m) => m.tier !== "active_dpo");
+  if (elsewhere.length === 0) return null;
+
+  return (
+    <section className="mt-10 border-t border-slate-200 pt-6" data-testid="tasks-elsewhere">
+      <p className="text-sm text-slate-600">
+        {elsewhere.length === 1
+          ? "One workspace you are a member of may have asked something of you."
+          : `${elsewhere.length} workspaces you are a member of may have asked something of you.`}{" "}
+        <Link href="/tasks" className="underline" data-testid="open-tasks">
+          See what is waiting on you
+        </Link>
+        .
+      </p>
+    </section>
   );
 }
 

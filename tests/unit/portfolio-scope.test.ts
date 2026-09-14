@@ -157,6 +157,13 @@ describe("the data the dashboard reads per workspace", () => {
     // portfolio dashboard reads DPO-scoped data only after `requireSession`,
     // then renders tenant-level summaries instead of source-level details.
     //
+    // `assignment` (0016) is the one table here scoped to a PERSON rather than
+    // only to a tenant, so it got the full exercise: its read policy is
+    // `assignee_id = me OR I am the Active DPO here`, and the portfolio does
+    // not read it at all. The cross-tenant task list does, but only ever
+    // narrowed to the caller's own rows — a staff member must not learn that
+    // anyone else was asked anything.
+    //
     // The tier-3 tables added in 0013 are tenant-scoped and readable only by
     // that tenant's Active DPO. They are exposed here because the DPO manages
     // their own issued links; `token_hash` is withheld at column level, and a
@@ -178,6 +185,7 @@ describe("the data the dashboard reads per workspace", () => {
     expect(exposed).toEqual([
       "ai_call",
       "ai_suggestion",
+      "assignment",
       "dpia",
       "generated_document_draft",
       "generated_document_section",
