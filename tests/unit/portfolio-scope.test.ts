@@ -157,6 +157,12 @@ describe("the data the dashboard reads per workspace", () => {
     // portfolio dashboard reads DPO-scoped data only after `requireSession`,
     // then renders tenant-level summaries instead of source-level details.
     //
+    // The tier-3 tables added in 0013 are tenant-scoped and readable only by
+    // that tenant's Active DPO. They are exposed here because the DPO manages
+    // their own issued links; `token_hash` is withheld at column level, and a
+    // token holder never reaches these tables at all — `anon` has no grant on
+    // either and goes through definer functions instead.
+    //
     // If this fails again, do the same exercise: does the new table hold
     // anything scoped to a person, and does any portfolio/public path read or
     // render it at too-specific a level?
@@ -179,6 +185,8 @@ describe("the data the dashboard reads per workspace", () => {
       "people",
       "processing_activity",
       "processing_activity_share",
+      "scoped_access_event",
+      "scoped_access_grant",
       "software_discovery_signal",
       "tenants",
       "vendor_document",
