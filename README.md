@@ -14,6 +14,12 @@ round-trip and an auditor's read of the approved register, and the tier-2
 assignment primitive — one thing pushed to one member, with the response
 logged.
 
+A detection reaches the register through `ai-review/[id]/to-register`: it
+creates a `pending_dpo_review` draft, never an approved row, so
+`approve_processing_activity` remains the human step. What each source
+established decides what is prefilled — a colleague's vendor request states a
+purpose, an accounting line does not — and role is never prefilled at all.
+
 **Not built:** incidents, rights requests, and training content.
 
 Email sends through Resend when `RESEND_API_KEY` is set, and is otherwise

@@ -142,16 +142,30 @@ export default async function AiReviewPage({
                 </div>
 
                 {access.membership.tenantStatus === "active" ? (
-                  <form action={approveSuggestion}>
-                    <input type="hidden" name="suggestionId" value={suggestion.id} />
-                    <button
-                      type="submit"
-                      className="rounded bg-slate-900 px-3 py-1.5 text-sm text-white"
-                      data-testid="approve-ai-suggestion"
-                    >
-                      Mark reviewed
-                    </button>
-                  </form>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {/* Marking reviewed is only a stamp. This is the step that
+                        actually reaches the Article 30 register — as a draft
+                        the DPO then approves, never as a record. */}
+                    {suggestion.kind === "register_intake" ? (
+                      <Link
+                        href={`/tenants/${tenantId}/ai-review/${suggestion.id}/to-register`}
+                        className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-800"
+                        data-testid="add-to-register"
+                      >
+                        Add to register
+                      </Link>
+                    ) : null}
+                    <form action={approveSuggestion}>
+                      <input type="hidden" name="suggestionId" value={suggestion.id} />
+                      <button
+                        type="submit"
+                        className="rounded bg-slate-900 px-3 py-1.5 text-sm text-white"
+                        data-testid="approve-ai-suggestion"
+                      >
+                        Mark reviewed
+                      </button>
+                    </form>
+                  </div>
                 ) : (
                   <span className="rounded bg-amber-100 px-2 py-1 text-xs font-medium text-amber-900">
                     Workspace read-only
