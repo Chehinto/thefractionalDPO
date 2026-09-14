@@ -13,6 +13,7 @@ import "server-only";
  * the point of it; do not remove it to make an import "just work".
  *
  *   requestClient  — the signed-in user's own client. RLS applies.
+ *   anonClient     — no session at all. RLS applies, as `anon`.
  *   serviceClient  — bypasses RLS entirely. Every caller must do its own
  *                    authorisation, because the database will not do it here.
  */
@@ -53,6 +54,24 @@ export async function requestClient() {
         },
       },
     }
+  );
+}
+
+/**
+ * Deliberately sessionless, for the tier-3 link pages.
+ *
+ * Not `requestClient` with the cookies ignored — `requestClient` READS cookies,
+ * so a DPO who happens to be signed in and opens a vendor link would evaluate
+ * that page as themselves, with their own memberships. A token holder's page
+ * must answer the same for everyone who holds the token and nothing more, so it
+ * runs as `anon`, which reaches no table in this database and only the definer
+ * functions granted to it.
+ */
+export function anonClient() {
+  return createClient(
+    requiredEnv("NEXT_PUBLIC_SUPABASE_URL"),
+    requiredEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY"),
+    { auth: { autoRefreshToken: false, persistSession: false } }
   );
 }
 

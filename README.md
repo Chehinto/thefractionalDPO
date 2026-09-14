@@ -5,10 +5,20 @@ is the tenant. See `docs/fractional-dpo-design-resume.md` for the product
 architecture; engineering ground rules are in `CLAUDE.md`.
 
 **Built so far:** the tenancy layer, portfolio/workspace views, the Art. 30
-register foundation, the DPIA data/approval foundation, and the AI-ready vendor
-evidence/questionnaire/reconciliation tables that feed DPIA review. Incidents,
-rights requests, training and the vendor-facing link/UI are still unbuilt; they
-should land only after their access rules are expressed in RLS and tested.
+register foundation, the DPIA data/approval foundation, the AI-ready vendor
+evidence/questionnaire/reconciliation tables that feed DPIA review, the AI
+suggestion pipeline behind them (day-to-day intake, software discovery, staff
+vendor requests, the DPO review inbox), and tier-3 scoped access — hashed,
+expiring, revocable links that carry the vendor-facing questionnaire round-trip.
+
+**Not built:** incidents, rights requests, training, and a tier-2 product
+surface for staff beyond submitting a vendor request. The `auditor_review`
+link purpose exists in the schema but has no read path yet, so only
+questionnaire links can be issued from the UI. Nothing sends email: a DPO
+copies a link and sends it themselves.
+
+New features should land only after their access rules are expressed in RLS and
+tested.
 
 ## Running it
 
@@ -42,6 +52,7 @@ Three pieces, and all three have to agree before anything is returned:
 | Database | `supabase/migrations/0001_tenancy.sql` | RLS policies predicated on live membership. The enforcement boundary. |
 | Predicates | `app.*` functions in the same file | One definition each of "who is this", "what tier do they hold here", "is this membership live". |
 | Application | `src/lib/tenant-access.ts` | Resolves the session to its memberships; refuses a tenant id the session does not hold. Defence in depth. |
+| Link tokens | `supabase/migrations/0013_scoped_access.sql` | Tier 3. `anon` reaches three SECURITY DEFINER functions and no table; the token is hashed before it is stored, and liveness is re-read on every call. |
 
 A person holds a row in `memberships` per tenant, with a validity window. That
 window does double duty: it is both the access grant and — because nothing here
