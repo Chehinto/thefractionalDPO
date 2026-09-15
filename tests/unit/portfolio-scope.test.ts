@@ -157,6 +157,10 @@ describe("the data the dashboard reads per workspace", () => {
     // portfolio dashboard reads DPO-scoped data only after `requireSession`,
     // then renders tenant-level summaries instead of source-level details.
     //
+    // `vendor_triage` (0019) holds a model's recollection of a product, never
+    // anything about this company — DPO-only, and `stated` is unrepresentable
+    // on it by check constraint, so it cannot become evidence by accident.
+    //
     // `email_log` (0018) carries the one thing on this list that is personal
     // data about someone who is not a user of the product: a vendor's address,
     // and a subject line naming their company. It is exposed because a DPO has
@@ -213,6 +217,7 @@ describe("the data the dashboard reads per workspace", () => {
       "vendor_questionnaire_question",
       "vendor_questionnaire_response",
       "vendor_request",
+      "vendor_triage",
     ]);
   });
 
