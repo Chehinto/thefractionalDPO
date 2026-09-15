@@ -20,7 +20,13 @@ creates a `pending_dpo_review` draft, never an approved row, so
 established decides what is prefilled — a colleague's vendor request states a
 purpose, an accounting line does not — and role is never prefilled at all.
 
-**Not built:** incidents, rights requests, and training content.
+Incidents keep an Article 33 clock that runs from discovery, not from the
+breach. Training carries real content and a quiz, with the answer key in a
+DPO-only table — a trainee and a DPO are the same Postgres role, so hiding it
+needs row-level security rather than a column grant.
+
+**Not built:** rights requests (Art. 15-22), a DPO-side authoring screen for
+training modules, and per-question feedback after a quiz attempt.
 
 Email sends through Resend when `RESEND_API_KEY` is set, and is otherwise
 recorded as skipped rather than failing anything. A questionnaire is only

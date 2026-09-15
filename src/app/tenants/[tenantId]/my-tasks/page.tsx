@@ -81,6 +81,15 @@ export default async function MyTasksPage({ params }: { params: Promise<{ tenant
         </p>
         <p className="mt-2 text-sm text-slate-600">
           <Link
+            href={`/tenants/${tenantId}/training`}
+            className="underline"
+            data-testid="tasks-training"
+          >
+            Training published for you
+          </Link>
+        </p>
+        <p className="mt-1 text-sm text-slate-600">
+          <Link
             href={`/tenants/${tenantId}/request-vendor`}
             className="underline"
             data-testid="tasks-request-vendor"

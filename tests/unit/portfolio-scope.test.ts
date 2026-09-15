@@ -157,6 +157,13 @@ describe("the data the dashboard reads per workspace", () => {
     // portfolio dashboard reads DPO-scoped data only after `requireSession`,
     // then renders tenant-level summaries instead of source-level details.
     //
+    // The training tables (0021) are the one place a member reads more than
+    // what was pushed to them: a PUBLISHED module is readable by anyone in the
+    // workspace, which is the point of training. `training_answer_key` is the
+    // exception and is DPO-only — a staff member and a DPO are the same
+    // Postgres role, so hiding the key needs row-level security, not a column
+    // grant. `training_attempt` is your own rows plus the DPO's view.
+    //
     // `incident` (0020) is DPO-only: §4 gives tier 2 only what was pushed to
     // them, and a breach register is not that. A staff member who needs to
     // help gets an `assignment`.
@@ -215,6 +222,10 @@ describe("the data the dashboard reads per workspace", () => {
       "scoped_access_grant",
       "software_discovery_signal",
       "tenants",
+      "training_answer_key",
+      "training_attempt",
+      "training_module",
+      "training_question",
       "vendor_document",
       "vendor_dpia_reconciliation",
       "vendor_extracted_fact",
