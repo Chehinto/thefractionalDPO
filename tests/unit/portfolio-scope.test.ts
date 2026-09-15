@@ -157,6 +157,10 @@ describe("the data the dashboard reads per workspace", () => {
     // portfolio dashboard reads DPO-scoped data only after `requireSession`,
     // then renders tenant-level summaries instead of source-level details.
     //
+    // `incident` (0020) is DPO-only: §4 gives tier 2 only what was pushed to
+    // them, and a breach register is not that. A staff member who needs to
+    // help gets an `assignment`.
+    //
     // `vendor_triage` (0019) holds a model's recollection of a product, never
     // anything about this company — DPO-only, and `stated` is unrepresentable
     // on it by check constraint, so it cannot become evidence by accident.
@@ -202,6 +206,7 @@ describe("the data the dashboard reads per workspace", () => {
       "email_log",
       "generated_document_draft",
       "generated_document_section",
+      "incident",
       "memberships",
       "people",
       "processing_activity",
