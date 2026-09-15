@@ -20,7 +20,6 @@ async function seedModule(dpo: Actor, tenantId: string, published = true) {
       tenant_id: tenantId,
       title: "Handling personal data on email",
       body: "Check the recipient before attaching anything with names in it.",
-      pass_mark: 80,
       created_by: dpo.personId,
     })
     .select("id")
@@ -56,7 +55,13 @@ async function seedModule(dpo: Actor, tenantId: string, published = true) {
   );
 
   if (published) {
-    await dpo.client.from("training_module").update({ published: true }).eq("id", module!.id);
+    // Publishing is the review act and is attributed, so it goes through the
+    // function rather than a direct update — `published` is no longer in the
+    // update grant.
+    await dpo.client.rpc("publish_training_module", {
+      p_caller_person_id: dpo.personId,
+      p_module_id: module!.id,
+    });
   }
   return module!.id as string;
 }
@@ -121,7 +126,7 @@ test("a wrong answer does not pass, and the answers are never in the page", asyn
   await page.getByTestId("submit-training").click();
 
   await expect(page.getByTestId("training-result")).toContainText("50%");
-  await expect(page.getByTestId("training-result")).toContainText("pass mark is 80%");
+  await expect(page.getByTestId("training-result")).toContainText("pass mark is 90%");
 });
 
 test("an unpublished module is not offered to staff", async ({ page }) => {

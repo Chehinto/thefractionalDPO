@@ -21,12 +21,15 @@ established decides what is prefilled — a colleague's vendor request states a
 purpose, an accounting line does not — and role is never prefilled at all.
 
 Incidents keep an Article 33 clock that runs from discovery, not from the
-breach. Training carries real content and a quiz, with the answer key in a
-DPO-only table — a trainee and a DPO are the same Postgres role, so hiding it
-needs row-level security rather than a column grant.
+breach. Training is drafted by AI, reviewed and published by a named DPO, and
+sent to one person or to everyone; it passes at 90%, runs under 10 minutes, and
+keeps its answer key in a DPO-only table — a trainee and a DPO are the same
+Postgres role, so hiding it needs row-level security rather than a column
+grant. All three of those rules are database constraints, not page logic.
 
-**Not built:** rights requests (Art. 15-22), a DPO-side authoring screen for
-training modules, and per-question feedback after a quiz attempt.
+**Not built:** rights requests (Art. 15-22), and per-question feedback after a
+quiz attempt. Interactive course content (video, branching, SCORM) is
+deliberately out of scope — generate the script here, author it elsewhere.
 
 Email sends through Resend when `RESEND_API_KEY` is set, and is otherwise
 recorded as skipped rather than failing anything. A questionnaire is only
