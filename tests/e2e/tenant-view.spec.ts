@@ -116,28 +116,14 @@ test.describe("a refusal is indistinguishable from a workspace that does not exi
     await expectIdentical(theirs, missing, ["Confidential Rival Ltd", stranger.email]);
   });
 
-  test("a workspace they are only staff in answers the same way", async ({ page }) => {
-    // §4 tier 2: staff never see the register or a DPIA. Not seeing this screen
-    // is the same rule, and the refusal must not hint that a better tier exists.
-    const staff = await createActor("tv-staff");
-    await createTenant(staff, "Their Own Ltd", "voluntary");
-
-    const employer = await createActor("tv-employer");
-    const employerTenant = await createTenant(employer, "Employs Them Ltd", "contractual");
-    await employer.client.rpc("add_member", {
-      p_tenant_id: employerTenant,
-      p_email: staff.email,
-      p_tier: "staff",
-    });
-
-    await signIn(page, staff);
-
-    const missing = await refusal(page, `/tenants/${NONEXISTENT}`);
-    const employerView = await refusal(page, `/tenants/${employerTenant}`);
-
-    expect(employerView.status).toBe(404);
-    await expectIdentical(employerView, missing, ["Employs Them Ltd", employer.email]);
-  });
+  // A workspace they are only staff in is NOT in this describe block any more:
+  // staff hold a live membership, so (task N1) this route redirects them to
+  // their own `/my-tasks` landing page instead of refusing them. Redirecting a
+  // member who already knows the workspace exists leaks nothing; the "refuse
+  // identically to a nonexistent tenant" property below is specifically for
+  // callers with NO live membership at all. See "staff access" further down
+  // for the staff-specific coverage (redirected, and the DPO dashboard itself
+  // never rendered).
 
   test("a workspace they only hold external access to answers the same way", async ({ page }) => {
     const reviewer = await createActor("tv-reviewer");
@@ -275,7 +261,9 @@ test.describe("the queue on this screen", () => {
 });
 
 test.describe("staff access", () => {
-  test("does not let a staff member into the DPO workspace", async ({ page }) => {
+  test("redirects a staff member away from the DPO workspace, never leaves them on it", async ({
+    page,
+  }) => {
     const staff = await createActor("tv-staff-closed");
     const employer = await createActor("tv-staff-closed-employer");
     const tenantId = await createTenant(employer, "Closed To Them Ltd", "mandatory");
@@ -288,10 +276,36 @@ test.describe("staff access", () => {
     await signIn(page, staff);
 
     for (const query of ["", "?view=dpo", "?view=employee"]) {
+      // A staff member holds a live membership here, so (task N1) this is a
+      // redirect to their own landing page, not a 404 — landing them
+      // somewhere that already names their own workspace discloses nothing
+      // they did not already know. What must still hold is that the DPO
+      // dashboard itself never renders, whatever query string was appended.
       const response = await page.goto(`/tenants/${tenantId}${query}`);
-      expect(response?.status()).toBe(404);
-      expect(await page.content()).not.toContain("Closed To Them Ltd");
+      expect(response?.status()).toBe(200);
+      await expect(page).toHaveURL(new RegExp(`/tenants/${tenantId}/my-tasks$`));
+      await expect(page.getByTestId("queue-row")).toHaveCount(0);
+      await expect(page.getByTestId("tenant-facts")).toHaveCount(0);
     }
+  });
+
+  test("a non-member still gets the same 404 as a nonexistent tenant", async ({ page }) => {
+    // The distinction task N1 asks for made explicit: redirecting a NON-member
+    // would confirm a workspace exists that they hold no membership in at all.
+    // Only a live member (staff, here) is ever redirected.
+    const stranger = await createActor("tv-staff-closed-stranger");
+    await createTenant(stranger, "Strangers Own Ltd", "voluntary");
+
+    const employer = await createActor("tv-staff-closed-employer-2");
+    const employerTenant = await createTenant(employer, "Still Closed Ltd", "mandatory");
+
+    await signIn(page, stranger);
+
+    const missing = await refusal(page, `/tenants/${NONEXISTENT}`);
+    const foreign = await refusal(page, `/tenants/${employerTenant}`);
+
+    expect(foreign.status).toBe(404);
+    await expectIdentical(foreign, missing, ["Still Closed Ltd", employer.email]);
   });
 
   test("does not render a DPO/employee view switch", async ({ page }) => {

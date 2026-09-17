@@ -125,6 +125,73 @@ describe("requireMembership", () => {
     await expectTenantError(requireMembership(TENANT_A, { tier: "active_dpo" }), 404);
   });
 
+  it("admits active_dpo and staff when no tier is asked for", async () => {
+    // The un-tiered call means "may use the workspace UI", and both tier 1 and
+    // tier 2 may — tier 2 with less on the page, which is RLS's job, not this
+    // function's.
+    for (const tier of ["active_dpo", "staff"] as const) {
+      withClient({ memberships: [membershipRow(TENANT_A, tier)] });
+      const { membership } = await requireMembership(TENANT_A);
+      expect(membership.tier).toBe(tier);
+    }
+  });
+
+  it("refuses external_scoped with 404 even though it is a real membership", async () => {
+    // §4 tier 3 is token-scoped disclosure served by `scoped_register()`. A
+    // tier-3 member inside the workspace UI would see nothing (RLS refuses the
+    // rows) but would still learn the workspace exists, so the application
+    // layer refuses them the page as well.
+    withClient({ memberships: [membershipRow(TENANT_A, "external_scoped")] });
+    await expectTenantError(requireMembership(TENANT_A), 404);
+  });
+
+  it("refuses external_scoped indistinguishably from a non-member", async () => {
+    withClient({ memberships: [membershipRow(TENANT_A, "external_scoped")] });
+    const scoped = await requireMembership(TENANT_A).catch((e: TenantAccessError) => e);
+
+    withClient({ memberships: [] });
+    const stranger = await requireMembership(TENANT_A).catch((e: TenantAccessError) => e);
+
+    expect((scoped as TenantAccessError).status).toBe(404);
+    expect((scoped as TenantAccessError).status).toBe((stranger as TenantAccessError).status);
+    expect((scoped as TenantAccessError).message).toBe((stranger as TenantAccessError).message);
+  });
+
+  it("admits external_scoped only when a caller opts in explicitly", async () => {
+    // The escape hatch exists so that widening is always a visible decision at
+    // the call site rather than a default.
+    withClient({ memberships: [membershipRow(TENANT_A, "external_scoped")] });
+    const { membership } = await requireMembership(TENANT_A, {
+      tiers: ["active_dpo", "staff", "external_scoped"],
+    });
+    expect(membership.tier).toBe("external_scoped");
+  });
+
+  it("does not let tier and tiers be combined", () => {
+    // Mutually exclusive by type rather than by runtime precedence: a
+    // combination like this one reads as narrowing but would admit MORE than
+    // the list beside it, so it is made unrepresentable instead of resolved.
+    // Enforced by `npx tsc --noEmit` — the assertion below is only here so the
+    // line is executed and cannot be dropped as dead code.
+    const both: Parameters<typeof requireMembership>[1] = {
+      tier: "external_scoped",
+      // @ts-expect-error - tiers cannot be passed alongside tier
+      tiers: ["active_dpo"],
+    };
+    expect(both).toBeDefined();
+  });
+
+  it("keeps an explicit tier exact, refusing a tier the default would admit", async () => {
+    // Guards the allow-list against loosening `{ tier }`: staff is inside
+    // WORKSPACE_UI_TIERS, and must still be refused when active_dpo was asked
+    // for by name.
+    withClient({ memberships: [membershipRow(TENANT_A, "staff")] });
+    await expectTenantError(requireMembership(TENANT_A, { tier: "active_dpo" }), 404);
+
+    withClient({ memberships: [membershipRow(TENANT_A, "active_dpo")] });
+    await expectTenantError(requireMembership(TENANT_A, { tier: "staff" }), 404);
+  });
+
   it("refuses a malformed tenant id without consulting the database", async () => {
     withClient({ memberships: [membershipRow(TENANT_A, "active_dpo")] });
     await expectTenantError(requireMembership("not-a-uuid"), 404);

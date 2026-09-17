@@ -58,7 +58,9 @@ test("reaches the register from the workspace and back", async ({ page }) => {
   await page.getByTestId("open-register").click();
 
   await expect(page).toHaveURL(new RegExp(`/tenants/${tenantId}/register$`));
-  await page.getByTestId("back-to-workspace").click();
+  // The Overview tab, not a per-page back-link: the tab bar replaced those,
+  // so this now exercises the navigation the product actually has.
+  await page.getByTestId("tab-overview").click();
   await expect(page.getByTestId("tenant-name")).toHaveText("Navigate Register Co");
 });
 
@@ -159,8 +161,15 @@ test.describe("a staff member", () => {
     });
 
     await signIn(page, staff);
+    // A staff member holds a live membership, so (task N1) this route
+    // redirects them to their own /my-tasks landing page rather than
+    // refusing them outright — the DPO overview itself must still never
+    // render, which is the property this test protects.
     const response = await page.goto(`/tenants/${tenantId}`);
-    expect(response?.status()).toBe(404);
+    expect(response?.status()).toBe(200);
+    await expect(page).toHaveURL(new RegExp(`/tenants/${tenantId}/my-tasks$`));
+    await expect(page.getByTestId("queue-row")).toHaveCount(0);
+    await expect(page.getByTestId("tenant-facts")).toHaveCount(0);
   });
 });
 

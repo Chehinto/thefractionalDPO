@@ -109,15 +109,7 @@ export default async function LinksPage({ params }: { params: Promise<{ tenantId
 
   return (
     <main className="mx-auto max-w-4xl px-4 py-10">
-      <Link
-        href={`/tenants/${tenantId}`}
-        className="text-sm text-slate-600 hover:underline"
-        data-testid="back-to-workspace"
-      >
-        ← Workspace
-      </Link>
-
-      <header className="mt-3 border-b border-slate-200 pb-5">
+      <header className="border-b border-slate-200 pb-5">
         <p className="text-xs uppercase tracking-widest text-slate-500">Shared links</p>
         <h1 className="mt-1 text-2xl font-semibold">Links you have issued</h1>
         <p className="mt-1 text-sm text-slate-600">

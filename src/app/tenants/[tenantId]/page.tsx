@@ -10,24 +10,39 @@
  * ACCESS
  *
  * `requireMembership(..., { tier: "active_dpo" })` decides whether this page
- * exists for this caller, and every failure becomes the same `notFound()`:
+ * exists for this caller, and every failure becomes `notFound()` — with one
+ * carve-out:
  *
- *   - no such tenant
- *   - a tenant belonging to someone else
- *   - a tenant this person is only staff or an external reviewer in
+ *   - no such tenant                              -> notFound()
+ *   - a tenant belonging to someone else            -> notFound()
+ *   - a tenant this person is only an external
+ *     reviewer in                                   -> notFound()
+ *   - a tenant this person is staff in              -> redirect to their own
+ *                                                      `/my-tasks` landing page
  *
- * All three are one response. A 403, or a different page for "you're only
- * staff here", would confirm the workspace is real and tell the caller what
- * they would need to reach it — which is a map of other companies' workspaces
- * drawn one request at a time. §4 tier 2 is explicit that staff never see the
- * register or a DPIA; not seeing this screen is the same rule.
+ * Staff are the one case that gets a redirect instead of a 404, and the
+ * distinction is deliberate rather than an oversight: a redirect only ever
+ * fires for someone who already holds a live membership here, so it discloses
+ * nothing they don't already know. Reusing it for a non-member would do the
+ * opposite — a stranger who tried a random tenant id would learn "this
+ * workspace exists and I should go here", which is exactly the enumeration
+ * this route exists to prevent for everyone else. §4 tier 2 is explicit that
+ * staff never see the register-as-a-whole or a DPIA; sending them to the
+ * screen built for them, instead of just refusing this one, is the same rule
+ * applied constructively.
+ *
+ * The redirect is resolved here, not in `layout.tsx` one segment up: this
+ * page already does a live membership lookup for its own `notFound()` check,
+ * so a second lookup for the redirect is one extra live read, not a new kind
+ * of check, and it keeps the layout free of any decision that could ever look
+ * like enforcement (see that file's comment for why that boundary matters).
  *
  * Underneath, RLS refuses the rows anyway. This check is the second of the two.
  */
 
 import Link from "next/link";
-import { notFound } from "next/navigation";
-import { requireMembership, TenantAccessError } from "@/lib/tenant-access";
+import { notFound, redirect } from "next/navigation";
+import { requireMembership, requireSession, TenantAccessError } from "@/lib/tenant-access";
 import { requestClient } from "@/lib/supabase-server";
 import { LEGAL_BASIS_LABELS } from "@/lib/legal-basis";
 import {
@@ -65,9 +80,19 @@ export default async function TenantPage({
   } catch (e) {
     if (!(e instanceof TenantAccessError)) throw e;
     // 401 means we do not know who they are — send them to sign in, which is
-    // the same response for every tenant id and so reveals nothing. Anything
-    // else collapses to "no such page".
+    // the same response for every tenant id and so reveals nothing.
     if (e.status === 401) return <SignInPrompt />;
+
+    // The active_dpo check above just refused. Before collapsing that to
+    // notFound(), ask (with a second, equally live lookup — never a cached or
+    // reused answer) whether this is a staff member who happens to have a
+    // live membership here, since that's the one case §4 wants redirected
+    // rather than refused. Everyone else — no membership at all, or a
+    // membership at a tier with no landing page here — still gets the same
+    // notFound() as always.
+    const session = await requireSession();
+    const membership = session.memberships.find((m) => m.tenantId === tenantId);
+    if (membership?.tier === "staff") redirect(`/tenants/${tenantId}/my-tasks`);
     notFound();
   }
 

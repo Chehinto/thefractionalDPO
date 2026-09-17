@@ -135,20 +135,70 @@ export async function requireSession(): Promise<CallerSession> {
 }
 
 /**
- * Confirm the caller holds a live membership in one specific tenant.
+ * The tiers that may use the authenticated workspace UI at all.
+ *
+ * `external_scoped` is deliberately absent. §4 tier 3 is scoped, token-based
+ * disclosure: that audience is served by `scoped_register()`, which exists
+ * precisely to hand them a stripped, per-link view of one thing they were given
+ * a token for. They therefore have no business inside the workspace UI — not
+ * even on a page that would render empty, because "renders empty" still
+ * confirms the workspace exists and that they are attached to it.
+ *
+ * An ALLOW-list rather than a deny-list, on purpose and at the cost of one
+ * extra edit per future tier: when a fourth value is added to `MembershipTier`,
+ * a deny-list would admit it everywhere by default, while this refuses it until
+ * someone names it here or opts in at the call site. That is the fail-closed
+ * direction, and it is the whole point of the constant.
+ */
+const WORKSPACE_UI_TIERS: readonly MembershipTier[] = ["active_dpo", "staff"];
+
+/**
+ * Confirm the caller holds a live membership in one specific tenant, at a tier
+ * that is allowed to be here.
  *
  * `tenantId` comes from the URL, which is to say from the caller. It is matched
  * against the server-resolved list and never used to fetch anything before that
  * match succeeds.
  *
- * `tier` narrows further — passing it asks for that exact tier. A caller with
- * the wrong tier gets 404 rather than 403 for the same reason a non-member
- * does: telling a staff member that a resource exists but needs Active DPO
- * confirms the resource exists.
+ * With no options, this asks the default question: "may this caller use the
+ * workspace UI for this tenant" — `WORKSPACE_UI_TIERS`, not "holds any row in
+ * `memberships`". `tier` narrows to that one exact tier; `tiers` is the
+ * explicit opt-in for a caller that genuinely wants a different set, including
+ * one that wants `external_scoped` back. Passing both is a compile error.
+ *
+ * Every refusal here is the same 404, unchanged and for the unchanged reason: a
+ * 403 would tell the caller the resource exists and merely needs a higher tier,
+ * which is enough to enumerate other companies' workspaces. "Not yours",
+ * "wrong tier" and "no such tenant" must stay indistinguishable.
+ *
+ * How much this check is carrying differs by route, and the difference matters
+ * enough that removing the check is not uniformly safe:
+ *
+ *  - For the register, RLS refuses tier 3 the data independently
+ *    (`processing_activity_read` in 0004 is Active-DPO-or-shared-with-you, and
+ *    the database suite proves an `external_scoped` member reads `[]`). There,
+ *    this is defence in depth.
+ *  - For `GET /api/tenants/{id}` and `POST /api/tenants/{id}/vendor-requests`
+ *    it is NOT. `tenants_read` (0001:316) and `vendor_request_insert` (0011:59)
+ *    are both `app.is_member_of(...)`, which is true for ANY live tier, and the
+ *    vendor-request route then writes the resulting `ai_suggestion` with the
+ *    service client (`bypassRlsAfterMembershipCheck: true`). For those two,
+ *    this function is the only thing standing between a tier-3 member and the
+ *    workspace's name/status/legal basis, or a row inserted in their name.
+ *
+ * So: do not "simplify" the tier gate away on the grounds that RLS has it. On
+ * those two paths, RLS does not.
  */
 export async function requireMembership(
   tenantId: string | null | undefined,
-  options: { tier?: MembershipTier } = {}
+  // The two forms are mutually exclusive by type rather than by precedence at
+  // runtime: silently letting `tier` win over `tiers` would mean
+  // `{ tier: "external_scoped", tiers: ["active_dpo"] }` admitted MORE than the
+  // list it was passed alongside. A combination that reads as narrowing but
+  // widens is exactly the mistake worth making unrepresentable.
+  options:
+    | { tier?: MembershipTier; tiers?: never }
+    | { tier?: never; tiers?: readonly MembershipTier[] } = {}
 ): Promise<TenantAccess> {
   const session = await requireSession();
 
@@ -156,7 +206,11 @@ export async function requireMembership(
 
   const membership = session.memberships.find((m) => m.tenantId === tenantId);
   if (!membership) throw NOT_FOUND();
-  if (options.tier && membership.tier !== options.tier) throw NOT_FOUND();
+
+  const allowed: readonly MembershipTier[] = options.tier
+    ? [options.tier]
+    : (options.tiers ?? WORKSPACE_UI_TIERS);
+  if (!allowed.includes(membership.tier)) throw NOT_FOUND();
 
   return { session, membership };
 }

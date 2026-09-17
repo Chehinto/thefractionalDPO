@@ -139,15 +139,7 @@ export default async function RegisterPage({
 
   return (
     <main className="mx-auto max-w-5xl px-4 py-10">
-      <Link
-        href={`/tenants/${tenantId}`}
-        className="text-sm text-slate-600 hover:underline"
-        data-testid="back-to-workspace"
-      >
-        ← Workspace
-      </Link>
-
-      <header className="mt-3 border-b border-slate-200 pb-5">
+      <header className="border-b border-slate-200 pb-5">
         <h1 className="text-2xl font-semibold">Register</h1>
         <p className="mt-1 text-sm text-slate-600" data-testid="register-summary">
           {activities.length === 0
