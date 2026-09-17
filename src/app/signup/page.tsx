@@ -33,9 +33,34 @@ export default function SignupPage() {
 
     // 1. The auth account. The trigger on auth.users resolves the person row as
     //    part of this, claiming an unclaimed roster entry if one matches.
-    const { error: signUpError } = await browserClient().auth.signUp({ email, password });
+    const { data: signUpData, error: signUpError } = await browserClient().auth.signUp({
+      email,
+      password,
+    });
     if (signUpError) {
       setError(signUpError.message);
+      setBusy(false);
+      return;
+    }
+
+    // Step 2 needs a session, and signUp only returns one when the project has
+    // email confirmation disabled. `supabase/config.toml` commits to that
+    // (enable_confirmations = false) and the whole suite runs against it, but a
+    // hosted project created through the dashboard defaults to confirmation ON
+    // and returns session: null here.
+    //
+    // Without this branch the workspace request below fails with a bare 401
+    // while the auth account and person row already exist — the person is told
+    // something went wrong with their details when what actually happened is
+    // that the environment is configured differently from the one this flow was
+    // built for. That is a misconfiguration, so say so, and do not leave them
+    // guessing which half succeeded.
+    if (!signUpData.session) {
+      setError(
+        "Your account was created, but this environment has email confirmation turned on, " +
+          "so there is no session yet to create the workspace with. Confirm your email, sign in, " +
+          "and the workspace step will be waiting."
+      );
       setBusy(false);
       return;
     }

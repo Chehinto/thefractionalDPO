@@ -1,0 +1,130 @@
+# Promoting to the production project.
+#
+# Same shape as the staging workflow, with one difference that matters: the
+# `production` environment. GitHub holds the run at that gate until a named
+# reviewer approves it, so merging to main proposes a release rather than
+# performing one. Configure the reviewers in Settings → Environments; without
+# them this gate is decoration.
+#
+# It does NOT apply database migrations, deliberately. This product's register
+# is other companies' regulatory record, and a pipeline that silently migrates
+# it is a pipeline that can silently lose it. Schema changes stay an explicit,
+# reviewed, separately-run step. When that step is automated it goes here,
+# ahead of the deploy and behind the same approval.
+
+name: Production
+
+on:
+  # Deliberately NOT `push: main`.
+  #
+  # The intended gate is the `production` environment's required reviewer, which
+  # GitHub offers on a public repository — unlike AxioVendo, which is private on
+  # the Free plan and cannot have one. Add `push: [main]` once the reviewer is
+  # configured and let the environment hold the run; until then, promotion is an
+  # explicit act: someone opens Actions and runs this against main.
+  workflow_dispatch:
+
+concurrency:
+  # Never cancel a production deploy in flight: the cancelled one may already
+  # have swung the alias, and the queue would leave the domain pointing at a
+  # build whose run was killed.
+  group: production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  # One line to change when a custom domain replaces the vercel.app URL.
+  PRODUCTION_DOMAIN: thefractional-dpo.vercel.app
+  VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+  VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PRODUCTION_PROJECT_ID }}
+
+jobs:
+  deploy:
+    name: Build, deploy, and verify production
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: production
+      url: https://thefractional-dpo.vercel.app
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Pull Vercel production environment
+        run: npx --yes vercel@59.12.0 pull --yes --environment=production --token="${{ secrets.VERCEL_TOKEN }}"
+
+      # The 17 Sep outage, turned into a check.
+      #
+      # A NEXT_PUBLIC_* variable marked "Sensitive" in Vercel is withheld from
+      # the build — `vercel pull` writes the literal string [SENSITIVE] in place
+      # of its value. Next then inlines nothing into the client bundle, and the
+      # server throws `NEXT_PUBLIC_SUPABASE_URL is not set` on every page that
+      # resolves a session. The deploy still succeeds and /api/build-info still
+      # answers correctly, because it reads a JSON file and no configuration —
+      # which is precisely why the verify step at the end cannot see this.
+      #
+      # So it is caught here, before building something already known broken.
+      # These two are public by definition; if either is Sensitive, that is the
+      # bug, and the fix is to store it as a plain (Config) variable.
+      - name: Check the build received its public configuration
+        run: |
+          env_file=".vercel/.env.production.local"
+          if [ ! -f "${env_file}" ]; then
+            echo "::error::${env_file} is missing — vercel pull did not write an environment"
+            exit 1
+          fi
+          for key in NEXT_PUBLIC_SUPABASE_URL NEXT_PUBLIC_SUPABASE_ANON_KEY; do
+            value="$(grep "^${key}=" "${env_file}" | cut -d= -f2- | tr -d '"')"
+            if [ -z "${value}" ]; then
+              echo "::error::${key} is not set on this Vercel project"
+              exit 1
+            fi
+            if [ "${value}" = "[SENSITIVE]" ]; then
+              echo "::error::${key} is marked Sensitive in Vercel, so the build cannot read it. A NEXT_PUBLIC_ value ships to every visitor in the client bundle; store it as a plain variable instead."
+              exit 1
+            fi
+          done
+          echo "Both public Supabase variables reached the build."
+
+      - name: Build Vercel output
+        run: npx --yes vercel@59.12.0 build --prod --token="${{ secrets.VERCEL_TOKEN }}"
+
+      - name: Deploy
+        id: deploy
+        run: |
+          out="$(npx --yes vercel@59.12.0 deploy --prebuilt --prod --yes --token="${{ secrets.VERCEL_TOKEN }}")"
+          echo "${out}"
+          url="$(printf "%s\n" "${out}" | awk '/^https:\/\// { u=$0 } END { print u }')"
+          if [ -z "${url}" ]; then
+            echo "Could not find a Vercel deployment URL in deploy output" >&2
+            exit 1
+          fi
+          echo "url=${url}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify production serves this commit
+        run: node scripts/verify_deployment_build.mjs "https://${PRODUCTION_DOMAIN}" "${GITHUB_SHA}"
+
+      # /api/build-info proves WHICH commit is serving. It does not prove the
+      # commit works: it reads a generated JSON file and touches no Supabase
+      # client, so it answers 200 even when every real page is throwing. The
+      # homepage is the cheapest honest canary — anonymous, no database rows
+      # needed, but it constructs a Supabase client and so fails loudly if the
+      # runtime configuration is missing.
+      - name: Check the deployed site actually renders
+        run: |
+          code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "https://${PRODUCTION_DOMAIN}/")"
+          if [ "${code}" != "200" ]; then
+            echo "::error::The deployed homepage returned HTTP ${code}. The build is serving but not working — check the runtime environment variables on this Vercel project."
+            exit 1
+          fi
+          echo "Homepage renders (HTTP 200)."

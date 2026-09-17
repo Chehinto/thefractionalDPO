@@ -3,6 +3,74 @@
 These rules apply to every session in this repo, not just the current
 task. Follow them without being re-asked.
 
+## Workflow
+
+1. **architect** subagent turns a requirement into a backlog: 3-8 tasks, each with acceptance
+   criteria and likely files. Read-only - it never writes code.
+2. **coder** subagent implements one backlog task at a time against its acceptance criteria.
+3. **reviewer** subagent checks the coder's changes against acceptance criteria, the rules below,
+   and the four data questions in its own definition. Verdict: `READY_TO_MERGE` or
+   `CHANGES_REQUIRED`.
+4. Iterate coder -> reviewer until `READY_TO_MERGE`.
+
+Subagents auto-trigger from their `description` field (see `.claude/agents/`). To force one
+explicitly: "have the architect subagent break this down" / "have the coder subagent implement
+task 2" / "have the reviewer subagent check this."
+
+Each subagent's model is set in its own frontmatter - writing "Model: X" in a prompt does nothing
+on its own. Architect and reviewer run on a stronger model because they make judgement calls;
+coder runs on a faster one for well-specified implementation. For a task touching auth, scoped
+links, an AI-to-record path, or a statutory clock, escalate explicitly - e.g. "have the coder
+subagent do this on opus" - a model named at invocation overrides the default.
+
+Leave `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` unset or `0` (`.claude/settings.json` sets it). It
+spawns fully independent parallel sessions, built for parallel exploration rather than a
+sequential architect -> coder -> reviewer pipeline.
+
+When handing work between agents, compress context to: goal (1-2 sentences), acceptance criteria,
+current state, open questions, files touched, risks. Aim well under 300 tokens; never re-paste the
+prior conversation.
+
+## Pipeline
+
+Four workflows in `.github/workflows/`, and what each one is for:
+
+- **PR** (`pr.yml`) - typecheck, lint, build, on every pull request and on pushes to `staging` and
+  `main`. No secrets and no database, so it runs on forks. These are the checks branch protection
+  should require.
+- **Tests** (`tests.yml`) - Vitest, then Playwright sharded three ways. Every job boots its own
+  Supabase stack and replays `supabase/migrations` from empty, so the migration history is
+  exercised on every run and no two runs share a database. Holds no secrets: the AI calls are
+  stubbed and email is unconfigured.
+- **Preview** (`preview.yml`) - a Vercel preview URL per pull request, posted as a sticky comment.
+  Skipped for forks, because it holds a deploy token.
+- **Staging** (`staging.yml`) - push to `staging` deploys and moves the staging URL.
+- **Production** (`production.yml`) - `workflow_dispatch` only, gated on the `production`
+  environment. Applies no database migrations, deliberately.
+
+Both deploy workflows end by reading `/api/build-info` back from the live domain and failing if the
+commit serving traffic is not the commit that triggered the run. `prebuild` writes that file from
+the git SHA; don't remove either half, and don't let a route or a header stop `/api/build-info`
+being reachable unauthenticated - the check runs before any session exists.
+
+Schema changes are not deployed. A migration reaches a hosted database as a separate, explicit,
+reviewed step.
+
+### Environment variables
+
+A `NEXT_PUBLIC_*` variable must be stored as a plain variable in Vercel, never as a **Sensitive**
+one. Sensitive values are withheld from the build: Next then inlines nothing into the client
+bundle and the server throws `NEXT_PUBLIC_SUPABASE_URL is not set` on any page that resolves a
+session. This took production down on 17 Sep 2026 and was invisible from the outside, because
+`/login` still rendered and `/api/build-info` still answered with the right commit. Marking such a
+value Sensitive protects nothing anyway — it is shipped to every visitor inside the JavaScript.
+
+Everything else — the service-role key, the AI key, the Resend key — stays Sensitive. Those are
+read at runtime under their own names and never need to reach the build.
+
+Both deploy workflows now refuse to build when a public variable did not reach them, and both
+check that the deployed homepage returns 200 rather than trusting `/api/build-info` alone.
+
 ## Testing
 
 Default to **Vitest**. Use it for anything that doesn't require an
