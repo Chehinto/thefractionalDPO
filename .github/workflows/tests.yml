@@ -48,9 +48,14 @@ jobs:
           node-version: 24
           cache: npm
 
+      # Pinned, not `latest`. On 17 Sep a shard died in 8 seconds with
+      # `supabase: command not found` because this action failed to fetch a
+      # release; the other two shards passed the identical steps. `latest` also
+      # means a Supabase release can break CI with no change on our side. This
+      # is the version that was `latest` that day and passed.
       - uses: supabase/setup-cli@v1
         with:
-          version: latest
+          version: 2.117.0
 
       - name: Start Supabase and apply the migration history
         run: supabase start
@@ -99,9 +104,14 @@ jobs:
           node-version: 24
           cache: npm
 
+      # Pinned, not `latest`. On 17 Sep a shard died in 8 seconds with
+      # `supabase: command not found` because this action failed to fetch a
+      # release; the other two shards passed the identical steps. `latest` also
+      # means a Supabase release can break CI with no change on our side. This
+      # is the version that was `latest` that day and passed.
       - uses: supabase/setup-cli@v1
         with:
-          version: latest
+          version: 2.117.0
 
       - name: Start Supabase and apply the migration history
         run: supabase start
