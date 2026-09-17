@@ -292,17 +292,24 @@ message_service_sid = ""
 # DO NOT commit your Twilio auth token to git. Use environment variable substitution instead:
 auth_token = "env(SUPABASE_AUTH_SMS_TWILIO_AUTH_TOKEN)"
 
-# Multi-factor-authentication is available to Supabase Pro plan.
+# Stock Supabase text here used to say MFA needs the Pro plan. It does not:
+# the TOTP enroll/challenge/verify API is enabled on every project on every
+# plan, and this organisation is on free. What Pro gates is MFA enforcement
+# for members of a Supabase ORGANISATION on the dashboard, which has nothing
+# to do with the second factor we offer our own users below.
 [auth.mfa]
 # Control how many MFA factors can be enrolled at once per user.
 max_enrolled_factors = 10
 
 # Control MFA via App Authenticator (TOTP)
 [auth.mfa.totp]
-enroll_enabled = false
-verify_enabled = false
+enroll_enabled = true
+verify_enabled = true
 
-# Configure MFA via Phone Messaging
+# Phone MFA stays disabled: this product never collects a phone number
+# anywhere, and adding one just to carry an OTP would be collecting personal
+# data beyond what sign-in requires (data-minimisation, Art. 5(1)(c)). TOTP is
+# the only second factor on offer.
 [auth.mfa.phone]
 enroll_enabled = false
 verify_enabled = false
@@ -331,6 +338,38 @@ url = ""
 # If enabled, the nonce check will be skipped. Required for local sign in with Google auth.
 skip_nonce_check = false
 # If enabled, it will allow the user to successfully authenticate when the provider does not return an email address.
+email_optional = false
+
+# Disabled by default: a provider nobody has registered a client for must not
+# be offered on the sign-in page. Enable per-environment once real credentials
+# exist.
+[auth.external.google]
+enabled = false
+client_id = ""
+# DO NOT commit your OAuth provider secret to git. Use environment variable substitution instead:
+secret = "env(SUPABASE_AUTH_EXTERNAL_GOOGLE_SECRET)"
+redirect_uri = ""
+url = ""
+# If enabled, the nonce check will be skipped. Required for local sign in with Google auth.
+# Committed as false: the nonce is replay protection for the ID token, and this
+# value survives the moment someone flips `enabled` to true. If local Google
+# sign-in rejects the nonce, set it true in your working tree and do not commit it.
+skip_nonce_check = false
+email_optional = false
+
+# Disabled by default: a provider nobody has registered a client for must not
+# be offered on the sign-in page.
+[auth.external.azure]
+enabled = false
+client_id = ""
+# DO NOT commit your OAuth provider secret to git. Use environment variable substitution instead:
+secret = "env(SUPABASE_AUTH_EXTERNAL_AZURE_SECRET)"
+redirect_uri = ""
+# A single-tenant Entra directory needs its own issuer here, e.g.
+# https://login.microsoftonline.com/<tenant-id>/v2.0 — blank means the common
+# multi-tenant endpoint.
+url = ""
+skip_nonce_check = false
 email_optional = false
 
 # Allow Solana wallet holders to sign in to your project via the Sign in with Solana (SIWS, EIP-4361) standard.
