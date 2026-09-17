@@ -1,12 +1,22 @@
 node_modules/
 .next/
 out/
-.env
-.env.local
-.env*.local
+.env*
+!.env.example
 *.tsbuildinfo
 next-env.d.ts
 test-results/
 playwright-report/
 supabase/.temp/
 supabase/.branches/
+
+# Generated at prebuild from the git SHA — a build artefact, not source.
+public/build-info.json
+
+# Vercel CLI link + pulled environment. Holds project ids and, after a `pull`,
+# real environment values.
+.vercel/
+
+# Claude Code: the agent definitions and the shared env are part of the
+# workflow and belong in the repo. Per-machine permission grants do not.
+.claude/settings.local.json
