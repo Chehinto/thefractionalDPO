@@ -130,6 +130,28 @@ export function prefillFromSuggestion(source: SuggestionSource): RegisterPrefill
 }
 
 /**
+ * The confidence tag for a multi-select field (data categories, data subjects),
+ * decided by whether anything was actually selected.
+ *
+ * Empty means `unknown`, and that is the final answer rather than a placeholder.
+ * An empty category array is never a fact about a processing activity — no real
+ * activity processes no data about nobody — so it can only mean the question was
+ * not answered. §9 forbids recording a gap as if it were an assertion: `stated`
+ * means a person directly said this, and nobody says nothing. Tagging an empty
+ * array `stated` also silently certifies "no special-category data", which is
+ * what decides whether Article 35 requires a DPIA.
+ *
+ * So when the selection inputs arrive, this stays as it is: the tag follows the
+ * selection, and an unanswered field keeps reading as the gap it is.
+ *
+ * Blank entries are treated as no selection, which is the fail-closed reading of
+ * an ambiguous form submission.
+ */
+export function selectionConfidence(values: readonly string[]): Confidence {
+  return values.some((value) => value.trim() !== "") ? "stated" : "unknown";
+}
+
+/**
  * A register draft cannot be created without the two things §9 says are never
  * guessed: a purpose (an entry with no purpose is not a record of anything) and
  * a role (always asserted).

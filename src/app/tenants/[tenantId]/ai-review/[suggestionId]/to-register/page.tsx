@@ -20,6 +20,7 @@ import { requireMembership, TenantAccessError } from "@/lib/tenant-access";
 import { requestClient } from "@/lib/supabase-server";
 import {
   prefillFromSuggestion,
+  selectionConfidence,
   validateRegisterDraft,
   type SuggestionSource,
 } from "@/lib/register-promotion";
@@ -119,6 +120,13 @@ export default async function ToRegisterPage({
       );
     }
 
+    // These three have no inputs on this form yet, so today they are always
+    // empty and always tag as unknown. That is the honest record of a question
+    // that was never put to anyone.
+    const ordinary = formData.getAll("ordinary").map(String);
+    const special = formData.getAll("special").map(String);
+    const subjects = formData.getAll("subjects").map(String);
+
     const client = await requestClient();
     const { data: created, error: insertError } = await client
       .from("processing_activity")
@@ -137,13 +145,15 @@ export default async function ToRegisterPage({
         recipient_vendor_confidence: prefill.recipientVendorConfidence,
         recipient_vendor_evidence: prefill.recipientVendorEvidence,
         role,
-        data_categories_ordinary: formData.getAll("ordinary").map(String),
-        data_categories_special: formData.getAll("special").map(String),
-        // The DPO is ticking boxes from what they know right now, not reading it
-        // out of a document. Stated, because a person is asserting it.
-        data_categories_confidence: "stated",
-        data_subjects: formData.getAll("subjects").map(String),
-        data_subjects_confidence: "stated",
+        data_categories_ordinary: ordinary,
+        data_categories_special: special,
+        // Stated only when the DPO actually ticked something, because only then
+        // is a person asserting it. Nothing selected is a gap, not a claim that
+        // no personal data is involved — and tagging it stated would certify
+        // "no special-category data" for Article 35 on a question nobody asked.
+        data_categories_confidence: selectionConfidence([...ordinary, ...special]),
+        data_subjects: subjects,
+        data_subjects_confidence: selectionConfidence(subjects),
         retention: String(formData.get("retention") ?? "").trim() || null,
         retention_confidence: String(formData.get("retention") ?? "").trim() ? "stated" : "unknown",
         created_by: current.session.personId,
