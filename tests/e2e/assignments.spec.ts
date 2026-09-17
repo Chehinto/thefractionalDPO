@@ -154,10 +154,19 @@ test("being asked something does not open the register or another member's tasks
   // context's cookies, so these carry Bob's real session — and back-to-back
   // navigations into Next's not-found pages abort each other, which reads as a
   // network error rather than the 404 being asserted.
-  for (const path of ["", "/roster", "/links", "/ai-review"]) {
+  for (const path of ["/roster", "/links", "/ai-review"]) {
     const response = await bobPage.request.get(`/tenants/${tenantId}${path}`);
     expect(response.status()).toBe(404);
   }
+
+  // The bare workspace root is NOT in that list: Bob holds a live membership,
+  // so (task N1) that route redirects him to his own /my-tasks page rather
+  // than refusing him — a 404 is reserved for callers with no live membership
+  // at all. `page.request` follows the redirect, so a 200 here is the
+  // redirect having landed successfully, not the DPO dashboard rendering.
+  const rootResponse = await bobPage.request.get(`/tenants/${tenantId}`);
+  expect(rootResponse.status()).toBe(200);
+  expect(rootResponse.url()).toContain(`/tenants/${tenantId}/my-tasks`);
 
   // `/register` is deliberately NOT in that list. It admits any member and lets
   // RLS decide what they see, so that a staff member can read the one activity
