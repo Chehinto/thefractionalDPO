@@ -1,0 +1,68 @@
+# What has to be true before anything merges.
+#
+# Deliberately free of secrets and of any database. These checks run on every
+# pull request including ones from forks, they take about two minutes, and
+# nothing they do can touch staging. The suite that needs a database is a
+# separate workflow — mixing them would mean either weakening this one or never
+# running it on an untrusted branch.
+#
+# These are the checks branch protection requires. A repository where the gates
+# exist but are not required is a repository with no gates.
+
+name: PR
+
+on:
+  pull_request:
+    branches: [staging, main]
+  # Runs on the branch too, so a direct push to staging (the deploy trigger)
+  # cannot skip the checks by not opening a pull request.
+  push:
+    branches: [staging, main]
+
+concurrency:
+  # One run per branch or pull request. Pushing twice in a minute cancels the
+  # first, because its answer is about code nobody is going to merge.
+  group: pr-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Typecheck, lint, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Run before the build, because tsc says WHICH type is wrong and a failed
+      # Next build says the file it gave up on.
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      # The one check that catches what the other two cannot: a route that does
+      # not compile, a client component importing a server module, a page that
+      # fails to prerender. It is also the same command the deploy runs, so a
+      # green build here means the deploy will get that far.
+      - name: Build
+        run: npm run build
+        env:
+          # Prerendering touches modules that read these at import time. They
+          # are not secrets and reach nothing real: the build must not depend on
+          # a live Supabase, and if it ever does, it fails here rather than in
+          # production.
+          NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: placeholder-anon-key

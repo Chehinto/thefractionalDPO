@@ -1,0 +1,143 @@
+# The regression suite, against a database built from the migration history.
+#
+# Every run starts a Supabase stack inside the runner and lets it apply
+# supabase/migrations from empty. Two things follow, and the second is the
+# reason to prefer this over pointing CI at a hosted project:
+#
+#  1. Isolation. The suite creates auth users, tenants and registers. Against a
+#     shared project that means CI writing into a database someone is demoing
+#     from, and two runs racing the same rows. Here each run gets a database
+#     nobody else can see, and throws it away.
+#
+#  2. The history is exercised. 0001 through 0022 have to actually rebuild an
+#     empty database on every pull request. A migration that only works against
+#     the one database it was authored on is invisible until something rebuilds
+#     from zero. Now something rebuilds constantly.
+#
+# Unlike AxioVendo's equivalent, this workflow holds NO secrets. Every AI call
+# in the suite is stubbed (`vi.stubEnv`), email is unconfigured and records
+# itself as skipped, and there is no payment provider. That is what lets it run
+# on pull requests from forks: there is nothing here worth stealing.
+
+name: Tests
+
+on:
+  pull_request:
+    branches: [staging, main]
+  push:
+    branches: [staging, main]
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: Vitest
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Start Supabase and apply the migration history
+        run: supabase start
+
+      # The local stack's keys are generated per run, so they are read back
+      # rather than hardcoded. The names below are the ones tests/support and
+      # vitest.config.ts already expect; config.toml shifts the ports off the
+      # CLI defaults, so nothing here assumes 54321.
+      - name: Export the local stack's credentials
+        run: |
+          supabase status -o env \
+            | sed 's/^API_URL=/NEXT_PUBLIC_SUPABASE_URL=/' \
+            | sed 's/^ANON_KEY=/NEXT_PUBLIC_SUPABASE_ANON_KEY=/' \
+            | sed 's/^SERVICE_ROLE_KEY=/SUPABASE_SERVICE_ROLE_KEY=/' \
+            | sed 's/^DB_URL=/SUPABASE_DB_URL=/' \
+            | tr -d '"' >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The bulk of the suite: RLS policies, tenant isolation, promotion rules,
+      # the Article 33 clock. These talk to the database directly, so they are
+      # fast and they run first — an RLS regression should not wait behind a
+      # browser.
+      - name: Run the unit suite
+        run: npm test
+
+      - name: Stop Supabase
+        if: always()
+        run: supabase stop --no-backup
+
+  e2e:
+    name: Playwright ${{ matrix.shard }}/3
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Start Supabase and apply the migration history
+        run: supabase start
+
+      - name: Export the local stack's credentials
+        run: |
+          supabase status -o env \
+            | sed 's/^API_URL=/NEXT_PUBLIC_SUPABASE_URL=/' \
+            | sed 's/^ANON_KEY=/NEXT_PUBLIC_SUPABASE_ANON_KEY=/' \
+            | sed 's/^SERVICE_ROLE_KEY=/SUPABASE_SERVICE_ROLE_KEY=/' \
+            | sed 's/^DB_URL=/SUPABASE_DB_URL=/' \
+            | tr -d '"' >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install the browser
+        run: npx playwright install --with-deps chromium
+
+      # playwright.config.ts runs serially with one worker because the suite
+      # shares a database and races tenant counts — true of one machine, not of
+      # three machines with three separate databases. Each shard still runs its
+      # own files in order; they just no longer queue behind each other.
+      - name: Run the browser suite
+        run: npx playwright test --shard=${{ matrix.shard }}/3
+
+      # Traces only, and only for failures. Playwright is configured
+      # retain-on-failure, so a green shard uploads nothing.
+      - name: Keep the traces for a failed shard
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: traces-shard-${{ matrix.shard }}
+          path: test-results/
+          retention-days: 7
+
+      - name: Stop Supabase
+        if: always()
+        run: supabase stop --no-backup
