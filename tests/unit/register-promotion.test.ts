@@ -8,7 +8,11 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { prefillFromSuggestion, validateRegisterDraft } from "@/lib/register-promotion";
+import {
+  prefillFromSuggestion,
+  selectionConfidence,
+  validateRegisterDraft,
+} from "@/lib/register-promotion";
 
 const BASE = {
   kind: "register_intake",
@@ -98,5 +102,35 @@ describe("what a draft cannot be created without", () => {
     expect(validateRegisterDraft({ purpose: "Payroll", role: "" })).toContain("never inferred");
     expect(validateRegisterDraft({ purpose: "Payroll", role: "maybe" })).toContain("never inferred");
     expect(validateRegisterDraft({ purpose: "Payroll", role: "processor" })).toBeNull();
+  });
+});
+
+describe("the confidence tag on what the DPO selected", () => {
+  // The bug this guards against: both tags were hardcoded "stated" while the
+  // arrays were always empty, so every draft certified "no special-category
+  // data" and the Article 35 screen read clean across the whole register.
+  it("tags nothing selected as unknown, because an empty array is a gap, not a fact", () => {
+    expect(selectionConfidence([])).toBe("unknown");
+    expect(selectionConfidence(["", "   "])).toBe("unknown");
+  });
+
+  it("tags a selection as stated, because the DPO asserted it", () => {
+    expect(selectionConfidence(["Contact details"])).toBe("stated");
+    expect(selectionConfidence(["Contact details", "Health data"])).toBe("stated");
+    expect(selectionConfidence(["", "Employees"])).toBe("stated");
+  });
+
+  // Categories are tagged across both arrays together: ticking only a special
+  // category still means the question was answered.
+  it("counts special categories alone as a selection", () => {
+    const ordinary: string[] = [];
+    const special = ["Health data"];
+    expect(selectionConfidence([...ordinary, ...special])).toBe("stated");
+  });
+
+  // Data subjects are tagged on their own array, independently of categories.
+  it("tags data subjects independently of data categories", () => {
+    expect(selectionConfidence([])).toBe("unknown");
+    expect(selectionConfidence(["Job applicants"])).toBe("stated");
   });
 });
